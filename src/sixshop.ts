@@ -36,15 +36,32 @@ export async function fetchRecentOrders(): Promise<OrderItem[]> {
 }
 
 async function login(page: Page): Promise<void> {
+  // 로그인 페이지 방문해 쿠키 셋업
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-  await page.locator("#loginEmail").click();
-  await page.keyboard.type(config.sixshop.email, { delay: 20 });
-  await page.locator("#loginPassword").click();
-  await page.keyboard.type(config.sixshop.password, { delay: 20 });
-  await Promise.all([
-    page.waitForURL(/\/dashboard\//, { timeout: 30_000 }),
-    page.keyboard.press("Enter"),
-  ]);
+
+  // 직접 POST — UI 키보드 입력보다 CI에서 안정적 (재로그인 흐름과 동일)
+  const formData = new URLSearchParams({
+    idOrUserName: Buffer.from(config.sixshop.email).toString("base64"),
+    password: Buffer.from(config.sixshop.password).toString("base64"),
+    keepLoginAgreement: "on",
+    trendReportLogin: "",
+    memberNo: "0",
+    pageNo: "0",
+    shopCustomerNo: "0",
+  }).toString();
+  const res = await page.evaluate(async (body) => {
+    const r = await fetch("/member/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      credentials: "include",
+    });
+    const t = await r.text();
+    return { status: r.status, ok: t.includes('"RESULT":"OK"'), bodyHead: t.slice(0, 200) };
+  }, formData);
+  if (!res.ok) {
+    throw new Error(`login failed: status=${res.status}, body=${res.bodyHead}`);
+  }
 }
 
 async function gotoOrders(page: Page): Promise<void> {
