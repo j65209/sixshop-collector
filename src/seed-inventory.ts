@@ -137,7 +137,9 @@ async function pushToStockSheet(rows: ProductRow[]): Promise<void> {
     range: `${STOCK_SHEET_NAME}!A:Z`,
   });
 
-  const header = ["카테고리", "상품명", "옵션", "SKU", "현재재고", "판매수량", "남은재고", "리오더 알림"];
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const dateTag = `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
+  const header = ["카테고리", "상품명", "옵션", "SKU", "현재재고", `판매수량(${dateTag})`, "남은재고", "리오더 알림"];
   const values: (string | number)[][] = [header];
   for (const p of rows) {
     const r = values.length + 1; // 시트 행 번호 (1-based, header가 1행)

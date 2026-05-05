@@ -94,6 +94,23 @@ export async function getState(key: string): Promise<string | null> {
   return null;
 }
 
+export async function tagInventoryHeaderWithDate(): Promise<void> {
+  const STOCK_SHEET = "재고마스터";
+  const client = getClient();
+  const meta = await client.spreadsheets.get({ spreadsheetId: config.sheets.sheetId });
+  const exists = meta.data.sheets?.some((s) => s.properties?.title === STOCK_SHEET);
+  if (!exists) return; // seed-inventory가 아직 안 돌았으면 skip
+
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const label = `판매수량(${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료)`;
+  await client.spreadsheets.values.update({
+    spreadsheetId: config.sheets.sheetId,
+    range: `${STOCK_SHEET}!F1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[label]] },
+  });
+}
+
 export async function setState(key: string, value: string): Promise<void> {
   const sheets = getClient();
   const got = await sheets.spreadsheets.values.get({

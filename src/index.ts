@@ -1,5 +1,5 @@
 import { fetchRecentOrders } from "./sixshop.js";
-import { appendOrders, ensureSchema, readExistingKeys, setState } from "./sheets.js";
+import { appendOrders, ensureSchema, readExistingKeys, setState, tagInventoryHeaderWithDate } from "./sheets.js";
 import { rowKey, toRow } from "./types.js";
 
 async function main(): Promise<void> {
@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   if (orders.length === 0) {
     await setState("last_run_at", startedAt.toISOString());
     await setState("last_run_status", "ok:empty");
+    await tagInventoryHeaderWithDate();
     return;
   }
 
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
 
   await setState("last_run_at", collectedAt);
   await setState("last_run_status", `ok:${newRows.length}`);
+  await tagInventoryHeaderWithDate();
 }
 
 main().catch(async (err) => {
