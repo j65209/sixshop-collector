@@ -18,19 +18,12 @@ function loadServiceAccountJson(): string {
 }
 
 export const config = {
-  sixshop: {
-    email: required("SIXSHOP_EMAIL"),
-    password: required("SIXSHOP_PASSWORD"),
-    storeId: process.env.SIXSHOP_STORE_ID ?? "",
-  },
   sheets: {
     serviceAccountJson: loadServiceAccountJson(),
     sheetId: required("SHEET_ID"),
-    ordersSheetName: process.env.ORDERS_SHEET_NAME ?? "주문로그",
     stateSheetName: process.env.STATE_SHEET_NAME ?? "_state",
   },
   collect: {
-    days: Number(process.env.COLLECT_DAYS ?? 3),
     headless: (process.env.HEADLESS ?? "true") !== "false",
   },
 };

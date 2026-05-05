@@ -1,27 +1,72 @@
-import { fetchRecentOrders } from "./sixshop.js";
-import { appendOrders, ensureSchema, readExistingKeys, setState } from "./sheets.js";
-import { refreshInventory } from "./seed-inventory.js";
+import { fetchOrdersForBrand, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
+import { appendOrders, ensureBrandSchema, readExistingKeys, setState } from "./sheets.js";
+import { refreshInventoryForBrand } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
+import { type Brand, BRANDS } from "./brands.js";
+import type { OrderItem } from "./types.js";
 
 async function main(): Promise<void> {
   const startedAt = new Date();
   console.log(`[${startedAt.toISOString()}] sixshop-collector start`);
 
-  await ensureSchema();
+  const browser = await newBrowser();
+  let totalNewRows = 0;
+  const errors: string[] = [];
 
-  const orders = await fetchRecentOrders();
-  console.log(`fetched ${orders.length} order line(s) from sixshop`);
+  try {
+    for (const brand of BRANDS) {
+      await ensureBrandSchema(brand).catch((e) => {
+        errors.push(`${brand.displayName} schema: ${(e as Error).message}`);
+      });
 
-  if (orders.length === 0) {
-    await setState("last_run_at", startedAt.toISOString());
-    await setState("last_run_status", "ok:empty");
-    await safeRefreshInventory();
-    return;
+      const page = await newBrandPage(browser);
+      try {
+        await loginAsBrand(page, brand);
+
+        // 1) 주문 수집
+        try {
+          const orders = await fetchOrdersForBrand(page, brand);
+          const newRows = await appendNewOrders(brand, orders, startedAt);
+          totalNewRows += newRows;
+        } catch (err) {
+          console.error(`[${brand.displayName}] orders failed:`, (err as Error).message);
+          errors.push(`${brand.displayName} orders: ${(err as Error).message}`.slice(0, 100));
+        }
+
+        // 주문→재고 사이 page 정리 (다이얼로그 잔재 제거)
+        await page.goto("https://www.sixshop.com/dashboard/shop-home", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+
+        // 2) 재고 새로고침
+        try {
+          await refreshInventoryForBrand(page, brand);
+        } catch (err) {
+          console.error(`[${brand.displayName}] inventory failed:`, (err as Error).message);
+          errors.push(`${brand.displayName} inv: ${(err as Error).message}`.slice(0, 100));
+        }
+      } finally {
+        await page.context().close();
+      }
+    }
+  } finally {
+    await browser.close();
   }
 
-  // 한 주문 안에 같은 상품+옵션이 여러 라인일 수 있어 수량/합계까지 포함
-  const KEY_COLS = [0, 3, 4, 6, 8]; // 주문번호, 상품명, 옵션, 수량, 합계
-  const existing = await readExistingKeys(KEY_COLS);
+  await setState("last_run_at", startedAt.toISOString());
+  if (errors.length === 0) {
+    await setState("last_run_status", `ok:${totalNewRows}`);
+  } else {
+    await setState("last_run_status", `partial:${totalNewRows}|${errors.join(";")}`.slice(0, 200));
+    process.exit(1);
+  }
+}
+
+async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Date): Promise<number> {
+  console.log(`[${brand.displayName}] fetched ${orders.length} order line(s)`);
+  if (orders.length === 0) return 0;
+
+  const KEY_COLS = [0, 3, 4, 6, 8];
+  const existing = await readExistingKeys(brand, KEY_COLS);
   const collectedAt = startedAt.toISOString();
 
   const newRows = orders
@@ -29,25 +74,12 @@ async function main(): Promise<void> {
     .map((o) => toRow(o, collectedAt));
 
   if (newRows.length === 0) {
-    console.log("no new rows (all already in sheet)");
+    console.log(`[${brand.displayName}] no new rows`);
   } else {
-    await appendOrders(newRows);
-    console.log(`appended ${newRows.length} new row(s)`);
+    await appendOrders(brand, newRows);
+    console.log(`[${brand.displayName}] appended ${newRows.length} new row(s)`);
   }
-
-  await setState("last_run_at", collectedAt);
-  await setState("last_run_status", `ok:${newRows.length}`);
-  await safeRefreshInventory();
-}
-
-// 재고 새로고침은 실패해도 주문 수집은 살리기 (방어적)
-async function safeRefreshInventory(): Promise<void> {
-  try {
-    await refreshInventory();
-  } catch (err) {
-    console.error("inventory refresh failed (orders OK):", (err as Error).message);
-    await setState("last_inventory_refresh", `error:${(err as Error).message}`.slice(0, 200));
-  }
+  return newRows.length;
 }
 
 main().catch(async (err) => {
@@ -55,8 +87,6 @@ main().catch(async (err) => {
   try {
     await setState("last_run_at", new Date().toISOString());
     await setState("last_run_status", `error:${(err as Error).message}`.slice(0, 200));
-  } catch {
-    // state 기록 실패는 무시
-  }
+  } catch {}
   process.exit(1);
 });
