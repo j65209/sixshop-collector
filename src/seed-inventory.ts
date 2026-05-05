@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Page } from "playwright";
+import { chromium } from "playwright";
 import { read, utils } from "xlsx";
 import { google } from "googleapis";
 import { config } from "./config.js";
@@ -10,22 +10,23 @@ import { config } from "./config.js";
 const PRODUCT_PAGE = "https://www.sixshop.com/dashboard/shop-products";
 const STOCK_SHEET_NAME = "재고마스터";
 
-async function main(): Promise<void> {
-  console.log("[seed-inventory] start");
-  const path = await downloadProductsXlsx();
-  const all = parseProducts(path);
-  // "판매 중" 상태인 상품만 시드 + 재고 많은 순 정렬
-  const products = all
-    .filter((p) => p.status === "판매 중")
-    .sort((a, b) => b.stock - a.stock);
-  console.log(`[parsed] total=${all.length}, 판매중=${products.length}`);
-  await unlink(path).catch(() => {});
-
-  await pushToStockSheet(products);
-  console.log(`[done] ${products.length} rows written to "${STOCK_SHEET_NAME}"`);
+interface ProductRow {
+  productName: string;
+  optionText: string;
+  sku: string;
+  stock: number;
+  status: string;
+  category: string;
 }
 
-async function downloadProductsXlsx(): Promise<string> {
+/** 오늘(KST) 날짜를 "M.D" 형태로. 헤더 라벨용. */
+function todayKstDateTag(): string {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
+}
+
+/** 식스샵 상품 페이지에서 CSV 다운로드. 상품 페이지는 재로그인 다이얼로그 없음. */
+async function downloadProductsCsv(): Promise<string> {
   const browser = await chromium.launch({ headless: config.collect.headless });
   try {
     const ctx = await browser.newContext({
@@ -34,7 +35,6 @@ async function downloadProductsXlsx(): Promise<string> {
     });
     const page = await ctx.newPage();
 
-    // 1) login (직접 POST)
     await page.goto("https://www.sixshop.com/member/login", { waitUntil: "domcontentloaded" });
     const loginBody = new URLSearchParams({
       idOrUserName: Buffer.from(config.sixshop.email).toString("base64"),
@@ -52,44 +52,29 @@ async function downloadProductsXlsx(): Promise<string> {
     }, loginBody);
     if (!loginRes.ok) throw new Error("login failed");
 
-    // 2) products page
-    await page.goto(PRODUCT_PAGE, { waitUntil: "networkidle", timeout: 60_000 });
-    await page.waitForTimeout(2500);
+    // dashboard는 polling이 많아 networkidle이 안 떠짐 → domcontentloaded로
+    await page.goto(PRODUCT_PAGE, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.waitForSelector("#downloadAllProductsBtn", { timeout: 30_000 });
+    await page.waitForTimeout(2000);
 
-    // 3) 다운로드 버튼 클릭 → CSV 즉시 다운로드 (재로그인 다이얼로그 없음)
     const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
     await page.locator("#downloadAllProductsBtn").click();
     const download = await downloadPromise;
 
-    const filename = download.suggestedFilename() || "products.xlsx";
+    const filename = download.suggestedFilename() || "products.csv";
     const out = join(tmpdir(), `sixshop-products-${Date.now()}-${filename}`);
     await download.saveAs(out);
-    console.log(`[xlsx saved] ${out}`);
     return out;
   } finally {
     await browser.close();
   }
 }
 
-interface ProductRow {
-  productName: string;
-  optionText: string;
-  sku: string;
-  stock: number;
-  status: string;
-  category: string;
-}
-
 function parseProducts(path: string): ProductRow[] {
-  // 식스샵 CSV는 BOM + UTF-8. xlsx.read가 csv도 처리.
   const buf = readFileSync(path);
   const wb = read(buf, { type: "buffer", raw: false });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = utils.sheet_to_json<Record<string, any>>(sheet, { defval: "" });
-  if (rows.length > 0) {
-    console.log("[csv columns]", Object.keys(rows[0]));
-    console.log("[first row]", JSON.stringify(rows[0], null, 2));
-  }
   return rows.map(mapRow).filter((p) => p.productName);
 }
 
@@ -98,30 +83,67 @@ function mapRow(r: Record<string, any>): ProductRow {
     for (const k of keys) if (k in r) return String(r[k] ?? "").trim();
     return "";
   };
-  const num = (...keys: string[]): number => {
-    const v = get(...keys);
-    return Number(v.replace(/[^\d.-]/g, "")) || 0;
-  };
-  // 식스샵 CSV 정확한 컬럼명
   const productName = get("이름", "상품 이름");
   const optionText = get("상품 옵션 정보");
   const sku = get("상품 코드");
-  const stock = num("수량");      // "0 개" → 0
-  const status = get("상태");     // "판매 중" / "판매 중지" 등
+
+  // "수량" 처리:
+  //  - "수량 관리 안 함" → 99999 (사실상 무한)
+  //  - "0 개" / "57 개" → 숫자 추출
+  //  - 옵션 있는 상품은 보통 0
+  const rawQty = get("수량");
+  let stock = 0;
+  if (/관리\s*안/.test(rawQty)) {
+    stock = 99999;
+  } else {
+    stock = Number(rawQty.replace(/[^\d.-]/g, "")) || 0;
+  }
+
+  const status = get("상태");
   const category = get("카테고리");
-  return { productName, optionText: optionText === "-" ? "" : optionText, sku: sku === "-" ? "" : sku, stock, status, category };
+  return {
+    productName,
+    optionText: optionText === "-" ? "" : optionText,
+    sku: sku === "-" ? "" : sku,
+    stock,
+    status,
+    category,
+  };
 }
 
-async function pushToStockSheet(rows: ProductRow[]): Promise<void> {
+function getSheetsClient() {
   const creds = JSON.parse(config.sheets.serviceAccountJson);
   const auth = new google.auth.GoogleAuth({
     credentials: creds,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
-  const sheets = google.sheets({ version: "v4", auth });
+  return google.sheets({ version: "v4", auth });
+}
+
+/** 기존 재고마스터 시트의 (상품명 → 현재재고) 맵을 반환. 옵션 있는 상품의 수동 입력 보존용. */
+async function readExistingStocks(): Promise<Map<string, number>> {
+  const sheets = getSheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: config.sheets.sheetId });
+  if (!meta.data.sheets?.some((s) => s.properties?.title === STOCK_SHEET_NAME)) {
+    return new Map();
+  }
+  const got = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheets.sheetId,
+    range: `${STOCK_SHEET_NAME}!B2:E`,
+  });
+  const map = new Map<string, number>();
+  for (const row of got.data.values ?? []) {
+    const name = String(row[0] ?? "").trim();
+    const stock = Number(row[3]) || 0;
+    if (name) map.set(name, stock);
+  }
+  return map;
+}
+
+async function pushToStockSheet(rows: ProductRow[]): Promise<void> {
+  const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
 
-  // 시트 탭 ensure
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const exists = meta.data.sheets?.some((s) => s.properties?.title === STOCK_SHEET_NAME);
   if (!exists) {
@@ -131,29 +153,25 @@ async function pushToStockSheet(rows: ProductRow[]): Promise<void> {
     });
   }
 
-  // 데이터 비우고 새로 쓰기 (마스터는 매번 갱신)
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
     range: `${STOCK_SHEET_NAME}!A:Z`,
   });
 
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const dateTag = `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
-  const header = ["카테고리", "상품명", "옵션", "SKU", "현재재고", `판매수량(${dateTag})`, "남은재고", "리오더 알림"];
+  const dateTag = todayKstDateTag();
+  const header = [
+    "카테고리", "상품명", "옵션", "SKU",
+    `현재재고(${dateTag})`,
+    `판매수량(${dateTag})`,
+    "남은재고", "리오더 알림",
+  ];
   const values: (string | number)[][] = [header];
   for (const p of rows) {
-    const r = values.length + 1; // 시트 행 번호 (1-based, header가 1행)
+    const r = values.length + 1;
     values.push([
-      p.category,
-      p.productName,
-      p.optionText,
-      p.sku,
-      p.stock,
-      // 판매수량: 주문로그의 상품명(D열)과 매칭, 수량(G열) 합계
+      p.category, p.productName, p.optionText, p.sku, p.stock,
       `=IFERROR(SUMIF(주문로그!D:D, B${r}, 주문로그!G:G), 0)`,
-      // 남은재고 = 현재재고 - 판매수량
       `=E${r}-F${r}`,
-      // 리오더 알림: 남은재고가 5개 이하면 "⚠ 리오더"
       `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
     ]);
   }
@@ -165,7 +183,38 @@ async function pushToStockSheet(rows: ProductRow[]): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error("seed-inventory failed:", err);
-  process.exit(1);
-});
+/**
+ * 재고마스터 시트를 새로고침. 매일 cron + 수동 시드 모두에서 호출.
+ * - 식스샵 CSV에서 받은 stock > 0이면 그대로 사용 (옵션 없는 상품)
+ * - CSV stock = 0이면 기존 시트의 수동 입력값 보존 (옵션 있는 상품, 사장님이 직접 입력)
+ */
+export async function refreshInventory(): Promise<{ total: number }> {
+  const path = await downloadProductsCsv();
+  try {
+    const all = parseProducts(path);
+    const products = all
+      .filter((p) => p.status === "판매 중")
+      .sort((a, b) => b.stock - a.stock);
+
+    const existing = await readExistingStocks();
+    const final = products.map((p) => ({
+      ...p,
+      stock: p.stock > 0 ? p.stock : (existing.get(p.productName) ?? 0),
+    }));
+
+    await pushToStockSheet(final);
+    console.log(`[inventory refreshed] total=${all.length}, 판매중=${final.length}`);
+    return { total: final.length };
+  } finally {
+    await unlink(path).catch(() => {});
+  }
+}
+
+// 수동 실행: `npm run seed-inventory`
+const isDirectRun = import.meta.url === `file://${process.argv[1]}` || import.meta.url.endsWith(process.argv[1] ?? "");
+if (isDirectRun) {
+  refreshInventory().catch((err) => {
+    console.error("seed-inventory failed:", err);
+    process.exit(1);
+  });
+}

@@ -1,5 +1,6 @@
 import { fetchRecentOrders } from "./sixshop.js";
-import { appendOrders, ensureSchema, readExistingKeys, setState, tagInventoryHeaderWithDate } from "./sheets.js";
+import { appendOrders, ensureSchema, readExistingKeys, setState } from "./sheets.js";
+import { refreshInventory } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
 
 async function main(): Promise<void> {
@@ -14,7 +15,7 @@ async function main(): Promise<void> {
   if (orders.length === 0) {
     await setState("last_run_at", startedAt.toISOString());
     await setState("last_run_status", "ok:empty");
-    await tagInventoryHeaderWithDate();
+    await safeRefreshInventory();
     return;
   }
 
@@ -36,7 +37,17 @@ async function main(): Promise<void> {
 
   await setState("last_run_at", collectedAt);
   await setState("last_run_status", `ok:${newRows.length}`);
-  await tagInventoryHeaderWithDate();
+  await safeRefreshInventory();
+}
+
+// 재고 새로고침은 실패해도 주문 수집은 살리기 (방어적)
+async function safeRefreshInventory(): Promise<void> {
+  try {
+    await refreshInventory();
+  } catch (err) {
+    console.error("inventory refresh failed (orders OK):", (err as Error).message);
+    await setState("last_inventory_refresh", `error:${(err as Error).message}`.slice(0, 200));
+  }
 }
 
 main().catch(async (err) => {
