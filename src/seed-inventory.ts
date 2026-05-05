@@ -51,6 +51,23 @@ function mapRow(r: Record<string, any>): ProductRow {
   };
 }
 
+/**
+ * "상품 옵션 정보" 문자열을 옵션 값들로 분해.
+ * "Size: 1 Size,2 Size" → ["Size: 1 Size", "Size: 2 Size"]
+ * "컬러: 블루,옐로우,화이트" → ["컬러: 블루", "컬러: 옐로우", "컬러: 화이트"]
+ * 빈 값/"-" → [""] (옵션 없음, 단일 row)
+ */
+function expandOptions(rawOption: string): string[] {
+  const t = rawOption.trim();
+  if (!t || t === "-") return [""];
+  const m = t.match(/^([^:]+):\s*(.+)$/);
+  if (!m) return [t];
+  const optName = m[1].trim();
+  const values = m[2].split(",").map((v) => v.trim()).filter(Boolean);
+  if (values.length === 0) return [""];
+  return values.map((v) => `${optName}: ${v}`);
+}
+
 function getSheetsClient() {
   const creds = JSON.parse(config.sheets.serviceAccountJson);
   const auth = new google.auth.GoogleAuth({
@@ -61,6 +78,7 @@ function getSheetsClient() {
 }
 
 async function readExistingStocks(stockSheetName: string): Promise<Map<string, number>> {
+  // 키: `${상품명}::${옵션}` — 옵션별 수동 입력 보존
   const sheets = getSheetsClient();
   const meta = await sheets.spreadsheets.get({ spreadsheetId: config.sheets.sheetId });
   if (!meta.data.sheets?.some((s) => s.properties?.title === stockSheetName)) {
@@ -73,8 +91,9 @@ async function readExistingStocks(stockSheetName: string): Promise<Map<string, n
   const map = new Map<string, number>();
   for (const row of got.data.values ?? []) {
     const name = String(row[0] ?? "").trim();
+    const opt = String(row[1] ?? "").trim();
     const stock = Number(row[3]) || 0;
-    if (name) map.set(name, stock);
+    if (name) map.set(`${name}::${opt}`, stock);
   }
   return map;
 }
@@ -111,9 +130,13 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   const values: (string | number)[][] = [header];
   for (const p of rows) {
     const r = values.length + 1;
+    // 옵션 있으면 SUMIFS (상품명+옵션 매칭), 없으면 SUMIF (상품명만)
+    const salesFormula = p.optionText
+      ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}), 0)`
+      : `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`;
     values.push([
       p.category, p.productName, p.optionText, p.sku, p.stock,
-      `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`,
+      salesFormula,
       `=E${r}-F${r}`,
       `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
     ]);
@@ -130,18 +153,34 @@ export async function refreshInventoryForBrand(page: Page, brand: Brand): Promis
   const path = await downloadProductsCsv(page);
   try {
     const all = parseProducts(path);
-    const products = all
-      .filter((p) => brand.includeStatuses.includes(p.status))
-      .sort((a, b) => b.stock - a.stock);
+    const filtered = all.filter((p) => brand.includeStatuses.includes(p.status));
 
+    // 옵션 있는 상품은 옵션값마다 별도 row로 펼침
+    const expanded: ProductRow[] = [];
+    for (const p of filtered) {
+      const opts = expandOptions(p.optionText);
+      for (const optionText of opts) {
+        expanded.push({ ...p, optionText });
+      }
+    }
+
+    // 재고 많은 순 정렬
+    expanded.sort((a, b) => b.stock - a.stock);
+
+    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭
     const existing = await readExistingStocks(brand.stockSheetName);
-    const final = products.map((p) => ({
-      ...p,
-      stock: p.stock > 0 ? p.stock : (existing.get(p.productName) ?? 0),
-    }));
+    const final = expanded.map((p) => {
+      const key = `${p.productName}::${p.optionText}`;
+      // 옵션이 있으면 CSV 수량은 합계라 의미 없음 → 항상 기존 수동값 사용
+      // 옵션이 없으면 CSV 수량 우선, 없으면 기존값
+      const stock = p.optionText
+        ? (existing.get(key) ?? 0)
+        : (p.stock > 0 ? p.stock : (existing.get(key) ?? 0));
+      return { ...p, stock };
+    });
 
     await pushToStockSheet(brand, final);
-    console.log(`[${brand.displayName}] inventory refreshed: total=${all.length}, ${brand.includeStatuses.join("|")}=${final.length}`);
+    console.log(`[${brand.displayName}] inventory refreshed: products=${filtered.length}, rows(옵션 펼침)=${final.length}`);
     return { total: final.length };
   } finally {
     await unlink(path).catch(() => {});
