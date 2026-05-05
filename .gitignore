@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.DS_Store
+playwright-report
+test-results
+auth-state.json
+
+# 로컬 디버깅 스크립트/아티팩트
+inspect-*.mjs
+clean-sheet.mjs
+xhr-*.json
+xlsx-debug-*.xlsx
+*.png
+inspect.mjs

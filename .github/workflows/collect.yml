@@ -1,0 +1,55 @@
+name: collect-sixshop-orders
+
+on:
+  schedule:
+    - cron: "5 * * * *"   # 매시 5분 (정각 부하 회피)
+  workflow_dispatch:        # 수동 실행 가능
+
+concurrency:
+  group: collect-sixshop
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run collector
+        env:
+          SIXSHOP_EMAIL: ${{ secrets.SIXSHOP_EMAIL }}
+          SIXSHOP_PASSWORD: ${{ secrets.SIXSHOP_PASSWORD }}
+          SIXSHOP_STORE_ID: ${{ secrets.SIXSHOP_STORE_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          ORDERS_SHEET_NAME: ${{ vars.ORDERS_SHEET_NAME || '주문로그' }}
+          STATE_SHEET_NAME: ${{ vars.STATE_SHEET_NAME || '_state' }}
+          COLLECT_DAYS: ${{ vars.COLLECT_DAYS || '3' }}
+          HEADLESS: "true"
+        run: npx tsx src/index.ts
+
+      - name: Upload trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-debug
+          path: |
+            test-results
+            *.png
+            *.html
+          if-no-files-found: ignore
+          retention-days: 5
