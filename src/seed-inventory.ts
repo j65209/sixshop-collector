@@ -14,8 +14,10 @@ async function main(): Promise<void> {
   console.log("[seed-inventory] start");
   const path = await downloadProductsXlsx();
   const all = parseProducts(path);
-  // "판매 중" 상태인 상품만 시드
-  const products = all.filter((p) => p.status === "판매 중");
+  // "판매 중" 상태인 상품만 시드 + 재고 많은 순 정렬
+  const products = all
+    .filter((p) => p.status === "판매 중")
+    .sort((a, b) => b.stock - a.stock);
   console.log(`[parsed] total=${all.length}, 판매중=${products.length}`);
   await unlink(path).catch(() => {});
 
@@ -32,16 +34,23 @@ async function downloadProductsXlsx(): Promise<string> {
     });
     const page = await ctx.newPage();
 
-    // 1) login
+    // 1) login (직접 POST)
     await page.goto("https://www.sixshop.com/member/login", { waitUntil: "domcontentloaded" });
-    await page.locator("#loginEmail").click();
-    await page.keyboard.type(config.sixshop.email, { delay: 20 });
-    await page.locator("#loginPassword").click();
-    await page.keyboard.type(config.sixshop.password, { delay: 20 });
-    await Promise.all([
-      page.waitForURL(/\/dashboard\//, { timeout: 30_000 }),
-      page.keyboard.press("Enter"),
-    ]);
+    const loginBody = new URLSearchParams({
+      idOrUserName: Buffer.from(config.sixshop.email).toString("base64"),
+      password: Buffer.from(config.sixshop.password).toString("base64"),
+      keepLoginAgreement: "on",
+      trendReportLogin: "", memberNo: "0", pageNo: "0", shopCustomerNo: "0",
+    }).toString();
+    const loginRes = await page.evaluate(async (body) => {
+      const r = await fetch("/member/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body, credentials: "include",
+      });
+      return { ok: (await r.text()).includes('"RESULT":"OK"') };
+    }, loginBody);
+    if (!loginRes.ok) throw new Error("login failed");
 
     // 2) products page
     await page.goto(PRODUCT_PAGE, { waitUntil: "networkidle", timeout: 60_000 });
