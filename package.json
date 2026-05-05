@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "seed-inventory": "tsx src/seed-inventory.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "postinstall": "playwright install --with-deps chromium"
