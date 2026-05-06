@@ -22,6 +22,15 @@ function todayKstDateTag(): string {
   return `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
 }
 
+function nowKstStamp(): string {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const m = String(kst.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(kst.getUTCDate()).padStart(2, "0");
+  const hh = String(kst.getUTCHours()).padStart(2, "0");
+  const mm = String(kst.getUTCMinutes()).padStart(2, "0");
+  return `${kst.getUTCFullYear()}-${m}-${d} ${hh}:${mm}`;
+}
+
 function parseProducts(path: string): ProductRow[] {
   const buf = readFileSync(path);
   const wb = read(buf, { type: "buffer", raw: false });
@@ -225,6 +234,13 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
     range: `${brand.stockSheetName}!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
+  });
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${brand.stockSheetName}!J1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[`최신화: ${nowKstStamp()}`]] },
   });
 
   if (sheetId != null) {
