@@ -215,30 +215,27 @@ export async function refreshInventoryForBrand(page: Page, brand: Brand): Promis
       const opts = expandOptions(p.optionText);
       const fetched = optionStocksByProduct.get(p.productNo);
       for (const optionText of opts) {
-        // 옵션별 재고: mall API 결과 우선, 없으면 0 (수동 입력 fallback은 아래에서)
         const optStock = fetched?.get(optionText);
         expanded.push({ ...p, optionText, stock: optStock ?? p.stock });
       }
     }
 
-    // 재고 많은 순 정렬
-    expanded.sort((a, b) => b.stock - a.stock);
-
-    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭. 단 mall API에서 받은 값은 우선.
+    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭. mall API 값 우선.
     const existing = await readExistingStocks(brand.stockSheetName);
     const final = expanded.map((p) => {
       const key = `${p.productName}::${p.optionText}`;
       const fromApi = optionStocksByProduct.get(p.productNo)?.get(p.optionText);
       let stock = p.stock;
       if (p.optionText) {
-        // 옵션 있는 상품: mall API 값 > 기존 시트 수동값 > 0
         stock = fromApi ?? existing.get(key) ?? 0;
       } else {
-        // 옵션 없는 상품: CSV 값 > 기존 시트 수동값 > 0
         stock = p.stock > 0 ? p.stock : (existing.get(key) ?? 0);
       }
       return { ...p, stock };
     });
+
+    // 최종 stock 적용 후 재고 많은 순 정렬 (mall API 값 반영됨)
+    final.sort((a, b) => b.stock - a.stock);
 
     await pushToStockSheet(brand, final);
     const apiCount = [...optionStocksByProduct.values()].reduce((a, m) => a + m.size, 0);
