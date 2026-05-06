@@ -178,14 +178,17 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
 
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
-  const exists = meta.data.sheets?.some((s) => s.properties?.title === brand.stockSheetName);
-  if (!exists) {
+  let meta = await sheets.spreadsheets.get({ spreadsheetId });
+  let sheetMeta = meta.data.sheets?.find((s) => s.properties?.title === brand.stockSheetName);
+  if (!sheetMeta) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: brand.stockSheetName } } }] },
     });
+    meta = await sheets.spreadsheets.get({ spreadsheetId });
+    sheetMeta = meta.data.sheets?.find((s) => s.properties?.title === brand.stockSheetName);
   }
+  const sheetId = sheetMeta?.properties?.sheetId;
 
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
@@ -223,6 +226,30 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
+
+  if (sheetId != null) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          { clearBasicFilter: { sheetId } },
+          {
+            setBasicFilter: {
+              filter: {
+                range: {
+                  sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: values.length,
+                  startColumnIndex: 0,
+                  endColumnIndex: header.length,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+  }
 }
 
 export async function refreshInventoryForBrand(page: Page, brand: Brand): Promise<{ total: number }> {
