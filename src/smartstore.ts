@@ -88,6 +88,7 @@ function toKstDisplay(iso: string): string {
 export interface SsOrderLine {
   productOrderId: string;
   orderId: string;
+  originProductNo: string;
   productName: string;
   optionText: string;
   sellerProductCode: string;
@@ -106,6 +107,8 @@ interface LastChangedItem {
 interface ProductOrderDetail {
   productOrder: {
     productOrderId: string;
+    originalProductId?: number | string; // origin product id — 식스샵 매핑 키
+    productId?: number | string; // channel product id (per-channel)
     productName: string;
     productOption?: string;
     sellerProductCode?: string;
@@ -210,6 +213,10 @@ async function fetchOrderDetails(
       throw new Error(`SS query failed: ${resp.status} ${await resp.text()}`);
     }
     const data = (await resp.json()) as { data?: ProductOrderDetail[] };
+    if (process.env.SS_DEBUG === "1" && i === 0 && (data.data?.length ?? 0) > 0) {
+      console.log("[SS debug] sample productOrder keys:", Object.keys((data.data as any[])[0]?.productOrder ?? {}).join(","));
+      console.log("[SS debug] sample productOrder:", JSON.stringify((data.data as any[])[0]?.productOrder ?? {}, null, 2).slice(0, 1500));
+    }
     out.push(...(data.data ?? []));
   }
   return out;
@@ -234,6 +241,8 @@ export async function fetchSmartStoreOrders(
   return details.map((d) => ({
     productOrderId: String(d.productOrder.productOrderId),
     orderId: String(d.order.orderId),
+    // pay-order/product-orders/query는 originalProductId 키 사용 (products/search의 originProductNo와 동일 ID)
+    originProductNo: String(d.productOrder.originalProductId ?? d.productOrder.productId ?? ""),
     productName: d.productOrder.productName ?? "",
     optionText: d.productOrder.productOption ?? "",
     sellerProductCode: d.productOrder.sellerProductCode ?? "",
@@ -244,10 +253,10 @@ export async function fetchSmartStoreOrders(
   }));
 }
 
-/** 시트에 적재할 행 형식. 식스샵 ORDER_HEADER와 동일 12-col 구조로 맞춤 */
+/** 시트에 적재할 행 형식. K열 SS상품번호(originProductNo) — 식스샵 매핑용 */
 export const SS_ORDER_HEADER = [
   "주문번호", "상품주문번호", "주문일시", "상태", "상품명", "옵션",
-  "SKU", "수량", "결제금액", "수집일시",
+  "SKU", "수량", "결제금액", "수집일시", "SS상품번호",
 ] as const;
 
 export type SsOrderRow = [
@@ -261,6 +270,7 @@ export type SsOrderRow = [
   quantity: number,
   totalAmount: number,
   collectedAt: string,
+  originProductNo: string,
 ];
 
 export function ssRowKey(line: SsOrderLine): string {
@@ -280,5 +290,6 @@ export function ssToRow(line: SsOrderLine, collectedAt: string): SsOrderRow {
     line.quantity,
     line.totalPaymentAmount,
     collectedAt,
+    line.originProductNo,
   ];
 }
