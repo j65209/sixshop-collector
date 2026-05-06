@@ -8,6 +8,7 @@ import { type Brand, BRANDS } from "./brands.js";
 import { downloadProductsCsv, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
 
 interface ProductRow {
+  productNo: number;
   productName: string;
   optionText: string;
   sku: string;
@@ -41,7 +42,9 @@ function mapRow(r: Record<string, any>): ProductRow {
   const stock = /관리\s*안/.test(rawQty)
     ? 99999
     : Number(rawQty.replace(/[^\d.-]/g, "")) || 0;
+  const productNo = Number(get("상품고유번호")) || 0;
   return {
+    productNo,
     productName,
     optionText: optionText === "-" ? "" : optionText,
     sku: sku === "-" ? "" : sku,
@@ -49,6 +52,41 @@ function mapRow(r: Record<string, any>): ProductRow {
     status: get("상태"),
     category: get("카테고리"),
   };
+}
+
+/**
+ * mall API로 상품의 옵션별 재고 fetch.
+ * 응답: { shopProductOptionList: [{optionValueNo1, optionQuantity}], shopProductOptionValueList: [{optionValueNo, optionValue}] }
+ * 반환: Map<옵션값(예: "1size (41.5~47cm)"), 재고 수량>
+ */
+async function fetchOptionStocks(page: Page, brand: Brand, productNo: number): Promise<Map<string, number>> {
+  const data = await page.evaluate(async ({ memberNo, productNo }) => {
+    const r = await fetch(`/apis/mall/getShopProductByMemberNoAndProductNo?memberNo=${memberNo}&productNo=${productNo}`, {
+      credentials: "include",
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  }, { memberNo: brand.memberNo, productNo });
+
+  const result = new Map<string, number>();
+  if (!data) return result;
+
+  // optionValueNo → optionValue 매핑
+  const valueMap = new Map<number, string>();
+  for (const v of data.shopProductOptionValueList ?? []) {
+    valueMap.set(v.optionValueNo, String(v.optionValue ?? "").trim());
+  }
+  // 옵션 이름 (단일 옵션 가정)
+  const optionName = String(data.shopProductOptionNameList?.[0]?.optionName ?? "").trim();
+
+  // shopProductOptionList: 옵션 조합별 재고
+  for (const opt of data.shopProductOptionList ?? []) {
+    const v1 = valueMap.get(opt.optionValueNo1);
+    if (!v1) continue;
+    const key = optionName ? `${optionName}: ${v1}` : v1;
+    result.set(key, Number(opt.optionQuantity) || 0);
+  }
+  return result;
 }
 
 /**
@@ -155,32 +193,56 @@ export async function refreshInventoryForBrand(page: Page, brand: Brand): Promis
     const all = parseProducts(path);
     const filtered = all.filter((p) => brand.includeStatuses.includes(p.status));
 
+    // 옵션 있는 상품의 productNo → 옵션별 재고 Map (mall API 호출, 5개 병렬)
+    const optionStocksByProduct = new Map<number, Map<string, number>>();
+    const productsWithOptions = filtered.filter((p) => p.optionText && p.optionText !== "-" && p.productNo);
+    console.log(`[${brand.displayName}] fetching option stocks for ${productsWithOptions.length} products...`);
+    for (let i = 0; i < productsWithOptions.length; i += 5) {
+      const batch = productsWithOptions.slice(i, i + 5);
+      await Promise.all(batch.map(async (p) => {
+        try {
+          const stocks = await fetchOptionStocks(page, brand, p.productNo);
+          if (stocks.size > 0) optionStocksByProduct.set(p.productNo, stocks);
+        } catch (e) {
+          console.warn(`  option fetch failed for ${p.productName}: ${(e as Error).message}`);
+        }
+      }));
+    }
+
     // 옵션 있는 상품은 옵션값마다 별도 row로 펼침
     const expanded: ProductRow[] = [];
     for (const p of filtered) {
       const opts = expandOptions(p.optionText);
+      const fetched = optionStocksByProduct.get(p.productNo);
       for (const optionText of opts) {
-        expanded.push({ ...p, optionText });
+        // 옵션별 재고: mall API 결과 우선, 없으면 0 (수동 입력 fallback은 아래에서)
+        const optStock = fetched?.get(optionText);
+        expanded.push({ ...p, optionText, stock: optStock ?? p.stock });
       }
     }
 
     // 재고 많은 순 정렬
     expanded.sort((a, b) => b.stock - a.stock);
 
-    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭
+    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭. 단 mall API에서 받은 값은 우선.
     const existing = await readExistingStocks(brand.stockSheetName);
     const final = expanded.map((p) => {
       const key = `${p.productName}::${p.optionText}`;
-      // 옵션이 있으면 CSV 수량은 합계라 의미 없음 → 항상 기존 수동값 사용
-      // 옵션이 없으면 CSV 수량 우선, 없으면 기존값
-      const stock = p.optionText
-        ? (existing.get(key) ?? 0)
-        : (p.stock > 0 ? p.stock : (existing.get(key) ?? 0));
+      const fromApi = optionStocksByProduct.get(p.productNo)?.get(p.optionText);
+      let stock = p.stock;
+      if (p.optionText) {
+        // 옵션 있는 상품: mall API 값 > 기존 시트 수동값 > 0
+        stock = fromApi ?? existing.get(key) ?? 0;
+      } else {
+        // 옵션 없는 상품: CSV 값 > 기존 시트 수동값 > 0
+        stock = p.stock > 0 ? p.stock : (existing.get(key) ?? 0);
+      }
       return { ...p, stock };
     });
 
     await pushToStockSheet(brand, final);
-    console.log(`[${brand.displayName}] inventory refreshed: products=${filtered.length}, rows(옵션 펼침)=${final.length}`);
+    const apiCount = [...optionStocksByProduct.values()].reduce((a, m) => a + m.size, 0);
+    console.log(`[${brand.displayName}] inventory refreshed: products=${filtered.length}, rows=${final.length}, 옵션재고 from API=${apiCount}`);
     return { total: final.length };
   } finally {
     await unlink(path).catch(() => {});

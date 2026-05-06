@@ -3,6 +3,8 @@ export interface Brand {
   siteLink: string;
   /** 표시용 이름 */
   displayName: string;
+  /** 식스샵 memberNo (mall API 호출용) */
+  memberNo: number;
   /** 주문 로그 시트 탭 이름 */
   ordersSheetName: string;
   /** 재고 마스터 시트 탭 이름 */
@@ -19,6 +21,7 @@ export const BRANDS: Brand[] = [
   {
     siteLink: "6thanother",
     displayName: "6thanother",
+    memberNo: 184096,
     ordersSheetName: "6A 주문로그",
     stockSheetName: "6A 재고마스터",
     stateSheetName: "6A _state",
@@ -28,6 +31,7 @@ export const BRANDS: Brand[] = [
   {
     siteLink: "cleartype",
     displayName: "Clear.type",
+    memberNo: 274464,
     ordersSheetName: "CT 주문로그",
     stockSheetName: "CT 재고마스터",
     stateSheetName: "CT _state",
