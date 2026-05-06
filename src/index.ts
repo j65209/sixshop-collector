@@ -5,6 +5,12 @@ import { rowKey, toRow } from "./types.js";
 import { type Brand, BRANDS } from "./brands.js";
 import type { OrderItem } from "./types.js";
 
+/** UTC Date → "YYYY-MM-DD HH:mm:ss" 형식의 KST 문자열 */
+function toKstString(d: Date): string {
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+}
+
 async function main(): Promise<void> {
   const startedAt = new Date();
   console.log(`[${startedAt.toISOString()}] sixshop-collector start`);
@@ -49,8 +55,8 @@ async function main(): Promise<void> {
         await page.context().close();
       }
 
-      // brand별 _state 기록
-      await setBrandState(brand, "last_run_at", startedAt.toISOString());
+      // brand별 _state 기록 (KST 시간으로)
+      await setBrandState(brand, "last_run_at", toKstString(startedAt));
       if (brandErrors.length === 0) {
         await setBrandState(brand, "last_run_status", `ok:${newRowsCount}`);
       } else {
@@ -71,7 +77,8 @@ async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Dat
 
   const KEY_COLS = [0, 3, 4, 6, 8];
   const existing = await readExistingKeys(brand, KEY_COLS);
-  const collectedAt = startedAt.toISOString();
+  // 주문로그의 "수집일시"도 KST로
+  const collectedAt = toKstString(startedAt);
 
   const newRows = orders
     .filter((o) => !existing.has(rowKey(o)))
@@ -88,8 +95,8 @@ async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Dat
 
 main().catch(async (err) => {
   console.error("collector failed:", err);
-  // 어느 brand도 끝까지 못 갔을 때 — 첫 brand에라도 에러 기록
   for (const brand of BRANDS) {
+    await setBrandState(brand, "last_run_at", toKstString(new Date())).catch(() => {});
     await setBrandState(brand, "last_run_status", `error:${(err as Error).message}`.slice(0, 200)).catch(() => {});
     break;
   }
