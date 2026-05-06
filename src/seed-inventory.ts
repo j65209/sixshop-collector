@@ -76,34 +76,72 @@ async function fetchOptionStocks(page: Page, brand: Brand, productNo: number): P
   for (const v of data.shopProductOptionValueList ?? []) {
     valueMap.set(v.optionValueNo, String(v.optionValue ?? "").trim());
   }
-  // 옵션 이름 (단일 옵션 가정)
-  const optionName = String(data.shopProductOptionNameList?.[0]?.optionName ?? "").trim();
+  // 옵션 이름 리스트 — 다중 그룹은 optionName 2~3개 (orderNo 순)
+  const nameList = (data.shopProductOptionNameList ?? [])
+    .slice()
+    .sort((a: any, b: any) => (a.optionNameOrderNo ?? 0) - (b.optionNameOrderNo ?? 0))
+    .map((n: any) => String(n.optionName ?? "").trim());
 
   // shopProductOptionList: 옵션 조합별 재고
   for (const opt of data.shopProductOptionList ?? []) {
-    const v1 = valueMap.get(opt.optionValueNo1);
-    if (!v1) continue;
-    const key = optionName ? `${optionName}: ${v1}` : v1;
-    result.set(key, Number(opt.optionQuantity) || 0);
+    const parts: string[] = [];
+    for (const [idx, name] of nameList.entries()) {
+      const noKey = `optionValueNo${idx + 1}`;
+      const valueNo = opt[noKey];
+      if (valueNo == null) break;
+      const value = valueMap.get(valueNo);
+      if (!value) break;
+      parts.push(name ? `${name}: ${value}` : value);
+    }
+    if (parts.length === 0) continue;
+    result.set(parts.join(" / "), Number(opt.optionQuantity) || 0);
   }
   return result;
 }
 
 /**
  * "상품 옵션 정보" 문자열을 옵션 값들로 분해.
- * "Size: 1 Size,2 Size" → ["Size: 1 Size", "Size: 2 Size"]
- * "컬러: 블루,옐로우,화이트" → ["컬러: 블루", "컬러: 옐로우", "컬러: 화이트"]
- * 빈 값/"-" → [""] (옵션 없음, 단일 row)
+ * 단일 그룹: "컬러: 블루,화이트" → ["컬러: 블루", "컬러: 화이트"]
+ * 다중 그룹 (슬래시 분리, cartesian product):
+ *   "컬러: 블랙,화이트 / 사이즈: S,M" →
+ *     ["컬러: 블랙 / 사이즈: S", "컬러: 블랙 / 사이즈: M",
+ *      "컬러: 화이트 / 사이즈: S", "컬러: 화이트 / 사이즈: M"]
+ * 빈/"-" → [""]
  */
 function expandOptions(rawOption: string): string[] {
   const t = rawOption.trim();
   if (!t || t === "-") return [""];
-  const m = t.match(/^([^:]+):\s*(.+)$/);
-  if (!m) return [t];
-  const optName = m[1].trim();
-  const values = m[2].split(",").map((v) => v.trim()).filter(Boolean);
-  if (values.length === 0) return [""];
-  return values.map((v) => `${optName}: ${v}`);
+
+  // 슬래시로 그룹 분리 (예: "컬러: A,B / 사이즈: S,M" → ["컬러: A,B", "사이즈: S,M"])
+  const groups = t.split(/\s*\/\s*/).map((g) => g.trim()).filter(Boolean);
+
+  // 각 그룹을 [{name, values[]}] 로 파싱
+  const parsed: { name: string; values: string[] }[] = [];
+  for (const g of groups) {
+    const m = g.match(/^([^:]+):\s*(.+)$/);
+    if (!m) {
+      parsed.push({ name: "", values: [g] });
+      continue;
+    }
+    const name = m[1].trim();
+    const values = m[2].split(",").map((v) => v.trim()).filter(Boolean);
+    if (values.length === 0) continue;
+    parsed.push({ name, values });
+  }
+  if (parsed.length === 0) return [""];
+
+  // cartesian product
+  let combos: string[] = parsed[0].values.map((v) => `${parsed[0].name}: ${v}`);
+  for (let i = 1; i < parsed.length; i++) {
+    const next: string[] = [];
+    for (const c of combos) {
+      for (const v of parsed[i].values) {
+        next.push(`${c} / ${parsed[i].name}: ${v}`);
+      }
+    }
+    combos = next;
+  }
+  return combos;
 }
 
 function getSheetsClient() {
