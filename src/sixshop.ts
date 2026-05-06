@@ -170,8 +170,9 @@ function mapXlsxRow(r: Record<string, any>): OrderItem {
     return Number(v.replace(/[^\d.-]/g, "")) || 0;
   };
   const orderNumber = get("주문번호") || get("상품 주문번호");
+  // 빈 값 + "-" 모두 제거 (mall API/재고마스터 옵션과 형식 일치 위해)
   const optionText = [get("상품 옵션 정보"), get("추가 옵션 정보"), get("작성형 옵션 정보")]
-    .filter(Boolean).join(" / ");
+    .filter((s) => s && s !== "-").join(" / ");
   return {
     orderNumber,
     orderedAt: get("주문 일자"),
