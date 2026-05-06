@@ -237,10 +237,9 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
       : `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`;
 
     if (ssOrdersRef) {
-      // SS 판매수량: SS주문로그의 H열(수량) 합계, 매칭 키는 (상품명+옵션) — 매칭 안 맞으면 SKU 매칭으로 변경 필요
-      const ssFormula = p.optionText
-        ? `=IFERROR(SUMIFS(${ssOrdersRef}!H:H, ${ssOrdersRef}!E:E, B${r}, ${ssOrdersRef}!F:F, C${r}), 0)`
-        : `=IFERROR(SUMIF(${ssOrdersRef}!E:E, B${r}, ${ssOrdersRef}!H:H), 0)`;
+      // SS 판매수량: SKU 매칭 (스마트스토어 상품명은 식스샵과 다름).
+      // 재고마스터 D(SKU) ↔ SS주문로그 G(SKU). SKU 비면 0.
+      const ssFormula = `=IF(D${r}="", 0, IFERROR(SUMIF(${ssOrdersRef}!G:G, D${r}, ${ssOrdersRef}!H:H), 0))`;
       values.push([
         p.category, p.productName, p.optionText, p.sku, p.stock,
         sixshopFormula,
