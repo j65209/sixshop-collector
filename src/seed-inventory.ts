@@ -22,6 +22,20 @@ function todayKstDateTag(): string {
   return `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
 }
 
+/** "5.5~5.6" KST: 24h 윈도우 라벨 (어제 ~ 오늘) */
+function windowDateTag(): string {
+  const end = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+  return `${start.getUTCMonth() + 1}.${start.getUTCDate()}~${end.getUTCMonth() + 1}.${end.getUTCDate()}`;
+}
+
+/** "YYYY-MM-DD HH:mm:ss" KST string for (now - 24h). 주문로그/SS주문로그 datetime 컬럼과 비교용 (sortable string) */
+function windowStartKstString(): string {
+  const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+}
+
 function nowKstStamp(): string {
   const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const m = String(kst.getUTCMonth() + 1).padStart(2, "0");
@@ -241,8 +255,11 @@ async function readSsProductMapping(): Promise<Map<string, string>> {
 
 interface SsLine { tokens: Set<string>; qty: number; }
 
-/** SS주문로그 → Map<ssId, SsLine[]> */
-async function readSsLinesByProduct(brand: Brand): Promise<Map<string, SsLine[]>> {
+/**
+ * SS주문로그 → Map<ssId, SsLine[]>
+ * `windowStart`(KST "YYYY-MM-DD HH:mm:ss") 이후 주문일시만 포함 — 24h 윈도우 적재용.
+ */
+async function readSsLinesByProduct(brand: Brand, windowStart: string): Promise<Map<string, SsLine[]>> {
   if (!brand.smartStore) return new Map();
   const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
@@ -252,18 +269,23 @@ async function readSsLinesByProduct(brand: Brand): Promise<Map<string, SsLine[]>
   }
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${brand.smartStore.ssOrdersSheetName}!F2:K`,
+    range: `${brand.smartStore.ssOrdersSheetName}!C2:K`,
   });
-  // F=옵션(0), G=SKU(1), H=수량(2), I=결제금액(3), J=수집일시(4), K=SS상품번호(5)
+  // C=주문일시(0), D=상태(1), E=상품명(2), F=옵션(3), G=SKU(4), H=수량(5), I=결제금액(6), J=수집일시(7), K=SS상품번호(8)
   const map = new Map<string, SsLine[]>();
+  let inWindow = 0, outOfWindow = 0;
   for (const row of got.data.values ?? []) {
-    const opt = String(row[0] ?? "");
-    const qty = Number(row[2]) || 0;
-    const ssId = String(row[5] ?? "").trim();
+    const orderedAt = String(row[0] ?? "");
+    if (orderedAt < windowStart) { outOfWindow++; continue; }
+    const opt = String(row[3] ?? "");
+    const qty = Number(row[5]) || 0;
+    const ssId = String(row[8] ?? "").trim();
     if (!ssId || qty === 0) continue;
     if (!map.has(ssId)) map.set(ssId, []);
     map.get(ssId)!.push({ tokens: tokenizeOption(opt), qty });
+    inWindow++;
   }
+  console.log(`  [SS window ${windowStart}~now] ${inWindow} lines in, ${outOfWindow} older`);
   return map;
 }
 
@@ -328,41 +350,44 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   });
 
   const dateTag = todayKstDateTag();
+  const winTag = windowDateTag();
+  const winStart = windowStartKstString();
   const ordersRef = /[^가-힣A-Za-z0-9_]/.test(brand.ordersSheetName)
     ? `'${brand.ordersSheetName}'`
     : brand.ordersSheetName;
 
-  // SS 있는 브랜드면 매핑 + SS 라인 로드 후 식스샵 옵션 행으로 attribute
+  // SS 있는 브랜드면 매핑 + 24h 윈도우 SS 라인 로드 후 식스샵 옵션 행으로 attribute
   const hasSs = !!brand.smartStore;
   const ssProductMap = hasSs ? await readSsProductMapping() : new Map<string, string>();
-  const ssLinesByProduct = hasSs ? await readSsLinesByProduct(brand) : new Map<string, SsLine[]>();
+  const ssLinesByProduct = hasSs ? await readSsLinesByProduct(brand, winStart) : new Map<string, SsLine[]>();
   const ssAttribByRowIdx = hasSs
     ? attributeSsSalesToRows(rows, ssProductMap, ssLinesByProduct)
     : new Map<number, number>();
 
-  // 8-col (no SS) / 9-col (with SS): SS 컬럼은 G에 옵션 정규화 매칭한 값을 정적으로 적재
+  // 8-col (no SS) / 9-col (with SS): 판매 컬럼들은 24h 윈도우(어제~오늘)만 합산.
+  // 현재재고는 mall API의 실시간 재고이므로 윈도우 누적과 짝맞음 (남은재고 = 현재재고 - 24h판매).
   const header = hasSs
     ? [
         "카테고리", "상품명", "옵션", "SKU",
         `현재재고(${dateTag})`,
-        `식스샵 판매(${dateTag})`,
-        `스마트스토어 판매(${dateTag})`,
+        `식스샵 판매(${winTag})`,
+        `스마트스토어 판매(${winTag})`,
         "남은재고", "리오더 알림",
       ]
     : [
         "카테고리", "상품명", "옵션", "SKU",
         `현재재고(${dateTag})`,
-        `판매수량(${dateTag})`,
+        `판매수량(${winTag})`,
         "남은재고", "리오더 알림",
       ];
 
   const values: (string | number)[][] = [header];
   rows.forEach((p, i) => {
     const r = values.length + 1;
-    // 식스샵 판매수량: 주문로그의 G열(수량) 합계, 옵션 있으면 (상품명+옵션) 매칭, 없으면 상품명만
+    // 식스샵 판매수량: 24h 윈도우(주문일시 B열 >= winStart). 옵션 있으면 (상품명+옵션+날짜), 없으면 (상품명+날짜).
     const sixshopFormula = p.optionText
-      ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}), 0)`
-      : `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`;
+      ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}, ${ordersRef}!B:B, ">=${winStart}"), 0)`
+      : `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!B:B, ">=${winStart}"), 0)`;
 
     if (hasSs) {
       const raw = ssAttribByRowIdx.get(i) ?? 0;
