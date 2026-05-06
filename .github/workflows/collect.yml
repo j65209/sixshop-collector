@@ -35,6 +35,8 @@ jobs:
           SIXSHOP_PASSWORD: ${{ secrets.SIXSHOP_PASSWORD }}
           SIXSHOP_EMAIL_CLEARTYPE: ${{ secrets.SIXSHOP_EMAIL_CLEARTYPE }}
           SIXSHOP_PASSWORD_CLEARTYPE: ${{ secrets.SIXSHOP_PASSWORD_CLEARTYPE }}
+          SIXSHOP_EMAIL_PP: ${{ secrets.SIXSHOP_EMAIL_PP }}
+          SIXSHOP_PASSWORD_PP: ${{ secrets.SIXSHOP_PASSWORD_PP }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           STATE_SHEET_NAME: ${{ vars.STATE_SHEET_NAME || '_state' }}

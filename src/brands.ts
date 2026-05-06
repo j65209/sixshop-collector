@@ -38,6 +38,16 @@ export const BRANDS: Brand[] = [
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_CLEARTYPE",
   },
+  {
+    siteLink: "produktepr",
+    displayName: "Produktepr",
+    memberNo: 211642,
+    ordersSheetName: "PP 주문로그",
+    stockSheetName: "PP 재고마스터",
+    stateSheetName: "PP _state",
+    includeStatuses: ["판매 중", "품절"],
+    credEnvSuffix: "_PP",
+  },
 ];
 
 export function brandCredentials(brand: Brand): { email: string; password: string } {
