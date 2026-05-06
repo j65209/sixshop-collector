@@ -7,6 +7,8 @@ export interface Brand {
   ordersSheetName: string;
   /** 재고 마스터 시트 탭 이름 */
   stockSheetName: string;
+  /** 마지막 실행 메타데이터 시트 탭 이름 */
+  stateSheetName: string;
   /** 재고마스터에 포함할 상품 상태 */
   includeStatuses: string[];
   /** 환경변수 suffix. "" → SIXSHOP_EMAIL, "_CLEARTYPE" → SIXSHOP_EMAIL_CLEARTYPE */
@@ -19,6 +21,7 @@ export const BRANDS: Brand[] = [
     displayName: "6thanother",
     ordersSheetName: "6A 주문로그",
     stockSheetName: "6A 재고마스터",
+    stateSheetName: "6A _state",
     includeStatuses: ["판매 중"],
     credEnvSuffix: "",
   },
@@ -27,6 +30,7 @@ export const BRANDS: Brand[] = [
     displayName: "Clear.type",
     ordersSheetName: "CT 주문로그",
     stockSheetName: "CT 재고마스터",
+    stateSheetName: "CT _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_CLEARTYPE",
   },

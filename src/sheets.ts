@@ -53,7 +53,7 @@ async function ensureSheet(name: string, headerRow?: (string | number)[]): Promi
 
 export async function ensureBrandSchema(brand: Brand): Promise<void> {
   await ensureSheet(brand.ordersSheetName, ORDER_HEADER as unknown as string[]);
-  await ensureSheet(config.sheets.stateSheetName, ["key", "value"]);
+  await ensureSheet(brand.stateSheetName, ["key", "value"]);
 }
 
 export async function appendOrders(brand: Brand, rows: OrderRow[]): Promise<void> {
@@ -82,16 +82,12 @@ export async function readExistingKeys(brand: Brand, keyColumns: number[]): Prom
   return out;
 }
 
-async function ensureStateSheet(): Promise<void> {
-  await ensureSheet(config.sheets.stateSheetName, ["key", "value"]);
-}
-
-export async function getState(key: string): Promise<string | null> {
-  await ensureStateSheet();
+export async function getBrandState(brand: Brand, key: string): Promise<string | null> {
+  await ensureSheet(brand.stateSheetName, ["key", "value"]);
   const sheets = getClient();
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheets.sheetId,
-    range: `${config.sheets.stateSheetName}!A2:B`,
+    range: `${brand.stateSheetName}!A2:B`,
   });
   for (const row of got.data.values ?? []) {
     if (row[0] === key) return row[1] ?? null;
@@ -99,26 +95,26 @@ export async function getState(key: string): Promise<string | null> {
   return null;
 }
 
-export async function setState(key: string, value: string): Promise<void> {
-  await ensureStateSheet();
+export async function setBrandState(brand: Brand, key: string, value: string): Promise<void> {
+  await ensureSheet(brand.stateSheetName, ["key", "value"]);
   const sheets = getClient();
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheets.sheetId,
-    range: `${config.sheets.stateSheetName}!A2:B`,
+    range: `${brand.stateSheetName}!A2:B`,
   });
   const rows = got.data.values ?? [];
   const idx = rows.findIndex((r) => r[0] === key);
   if (idx >= 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: config.sheets.sheetId,
-      range: `${config.sheets.stateSheetName}!B${idx + 2}`,
+      range: `${brand.stateSheetName}!B${idx + 2}`,
       valueInputOption: "RAW",
       requestBody: { values: [[value]] },
     });
   } else {
     await sheets.spreadsheets.values.append({
       spreadsheetId: config.sheets.sheetId,
-      range: `${config.sheets.stateSheetName}!A:B`,
+      range: `${brand.stateSheetName}!A:B`,
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [[key, value]] },

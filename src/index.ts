@@ -1,5 +1,5 @@
 import { fetchOrdersForBrand, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
-import { appendOrders, ensureBrandSchema, readExistingKeys, setState } from "./sheets.js";
+import { appendOrders, ensureBrandSchema, readExistingKeys, setBrandState } from "./sheets.js";
 import { refreshInventoryForBrand } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
 import { type Brand, BRANDS } from "./brands.js";
@@ -10,13 +10,15 @@ async function main(): Promise<void> {
   console.log(`[${startedAt.toISOString()}] sixshop-collector start`);
 
   const browser = await newBrowser();
-  let totalNewRows = 0;
-  const errors: string[] = [];
+  let anyError = false;
 
   try {
     for (const brand of BRANDS) {
+      const brandErrors: string[] = [];
+      let newRowsCount = 0;
+
       await ensureBrandSchema(brand).catch((e) => {
-        errors.push(`${brand.displayName} schema: ${(e as Error).message}`);
+        brandErrors.push(`schema: ${(e as Error).message}`);
       });
 
       const page = await newBrandPage(browser);
@@ -26,14 +28,13 @@ async function main(): Promise<void> {
         // 1) 주문 수집
         try {
           const orders = await fetchOrdersForBrand(page, brand);
-          const newRows = await appendNewOrders(brand, orders, startedAt);
-          totalNewRows += newRows;
+          newRowsCount = await appendNewOrders(brand, orders, startedAt);
         } catch (err) {
           console.error(`[${brand.displayName}] orders failed:`, (err as Error).message);
-          errors.push(`${brand.displayName} orders: ${(err as Error).message}`.slice(0, 100));
+          brandErrors.push(`orders: ${(err as Error).message}`.slice(0, 80));
         }
 
-        // 주문→재고 사이 page 정리 (다이얼로그 잔재 제거)
+        // 주문→재고 사이 page 정리
         await page.goto("https://www.sixshop.com/dashboard/shop-home", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
         await page.waitForTimeout(1500);
 
@@ -42,23 +43,26 @@ async function main(): Promise<void> {
           await refreshInventoryForBrand(page, brand);
         } catch (err) {
           console.error(`[${brand.displayName}] inventory failed:`, (err as Error).message);
-          errors.push(`${brand.displayName} inv: ${(err as Error).message}`.slice(0, 100));
+          brandErrors.push(`inv: ${(err as Error).message}`.slice(0, 80));
         }
       } finally {
         await page.context().close();
+      }
+
+      // brand별 _state 기록
+      await setBrandState(brand, "last_run_at", startedAt.toISOString());
+      if (brandErrors.length === 0) {
+        await setBrandState(brand, "last_run_status", `ok:${newRowsCount}`);
+      } else {
+        anyError = true;
+        await setBrandState(brand, "last_run_status", `partial:${newRowsCount}|${brandErrors.join(";")}`.slice(0, 200));
       }
     }
   } finally {
     await browser.close();
   }
 
-  await setState("last_run_at", startedAt.toISOString());
-  if (errors.length === 0) {
-    await setState("last_run_status", `ok:${totalNewRows}`);
-  } else {
-    await setState("last_run_status", `partial:${totalNewRows}|${errors.join(";")}`.slice(0, 200));
-    process.exit(1);
-  }
+  if (anyError) process.exit(1);
 }
 
 async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Date): Promise<number> {
@@ -84,9 +88,10 @@ async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Dat
 
 main().catch(async (err) => {
   console.error("collector failed:", err);
-  try {
-    await setState("last_run_at", new Date().toISOString());
-    await setState("last_run_status", `error:${(err as Error).message}`.slice(0, 200));
-  } catch {}
+  // 어느 brand도 끝까지 못 갔을 때 — 첫 brand에라도 에러 기록
+  for (const brand of BRANDS) {
+    await setBrandState(brand, "last_run_status", `error:${(err as Error).message}`.slice(0, 200)).catch(() => {});
+    break;
+  }
   process.exit(1);
 });

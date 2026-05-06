@@ -21,7 +21,6 @@ export const config = {
   sheets: {
     serviceAccountJson: loadServiceAccountJson(),
     sheetId: required("SHEET_ID"),
-    stateSheetName: process.env.STATE_SHEET_NAME ?? "_state",
   },
   collect: {
     headless: (process.env.HEADLESS ?? "true") !== "false",
