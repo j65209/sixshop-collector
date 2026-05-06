@@ -120,7 +120,18 @@ interface ProductOrderDetail {
   };
 }
 
-async function fetchPayedIds(
+async function fetchWithRetry(url: string | URL, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const resp = await fetch(url, init);
+    if (resp.status !== 429) return resp;
+    const wait = 2000 * (attempt + 1);
+    console.log(`  rate limited, retry in ${wait}ms (attempt ${attempt + 1})`);
+    await sleep(wait);
+  }
+  return fetch(url, init);
+}
+
+async function fetchPayedIdsChunk(
   token: string,
   fromIso: string,
   toIso: string,
@@ -132,8 +143,9 @@ async function fetchPayedIds(
     const url = new URL(`${BASE_URL}/v1/pay-order/seller/product-orders/last-changed-statuses`);
     url.searchParams.set("lastChangedFrom", cursor);
     url.searchParams.set("lastChangedTo", toIso);
-    url.searchParams.set("lastChangedType", "PAYED");
-    const resp = await fetch(url, {
+    // lastChangedType 생략 — 모든 상태 변경을 가져온 뒤 details에서 status 기준으로 필터
+    // (PAYED만 필터하면 이미 배송 단계로 넘어간 과거 주문이 누락됨)
+    const resp = await fetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!resp.ok) {
@@ -142,11 +154,38 @@ async function fetchPayedIds(
     const data = (await resp.json()) as {
       data?: { lastChangeStatuses?: LastChangedItem[]; more?: { moreFrom?: string } | null };
     };
+    if (process.env.SS_DEBUG === "1") {
+      console.log(`[SS debug] from=${cursor} to=${toIso} → keys=${Object.keys(data).join(",")} dataKeys=${Object.keys(data.data ?? {}).join(",")} count=${(data.data?.lastChangeStatuses ?? []).length}`);
+      console.log(`[SS debug] raw: ${JSON.stringify(data).slice(0, 500)}`);
+    }
     const items = data.data?.lastChangeStatuses ?? [];
     for (const it of items) ids.push(it.productOrderId);
     const moreFrom = data.data?.more?.moreFrom;
     if (!moreFrom) break;
     cursor = moreFrom;
+  }
+  return ids;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Naver는 한 호출당 최대 24시간 윈도우만 허용 — 23h 단위로 쪼개서 순차 fetch (rate limit 회피용 sleep) */
+async function fetchPayedIds(
+  token: string,
+  from: Date,
+  to: Date,
+): Promise<string[]> {
+  const ids: string[] = [];
+  const chunkMs = 23 * 60 * 60 * 1000;
+  let cursor = from.getTime();
+  let firstChunk = true;
+  while (cursor < to.getTime()) {
+    if (!firstChunk) await sleep(1500);
+    firstChunk = false;
+    const chunkEnd = Math.min(cursor + chunkMs, to.getTime());
+    const chunkIds = await fetchPayedIdsChunk(token, toKstIso(new Date(cursor)), toKstIso(new Date(chunkEnd)));
+    for (const id of chunkIds) ids.push(id);
+    cursor = chunkEnd;
   }
   return Array.from(new Set(ids));
 }
@@ -188,10 +227,7 @@ export async function fetchSmartStoreOrders(
   const creds = smartStoreCreds(brand);
   const token = await getAccessToken(creds);
 
-  const fromIso = toKstIso(from);
-  const toIso = toKstIso(to);
-
-  const ids = await fetchPayedIds(token, fromIso, toIso);
+  const ids = await fetchPayedIds(token, from, to);
   if (ids.length === 0) return [];
 
   const details = await fetchOrderDetails(token, ids);
