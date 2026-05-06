@@ -183,6 +183,129 @@ async function readExistingStocks(stockSheetName: string): Promise<Map<string, n
   return map;
 }
 
+/**
+ * 옵션 텍스트 → 토큰 set. 그룹명/순서/구분자 차이를 흡수하고 의미 토큰만 추출.
+ * 식스샵/SS 옵션 매칭용 — exact 일치, 또는 한쪽이 다른 쪽의 subset인 경우까지 매칭 가능.
+ *
+ * 예:
+ *   식스샵 "옵션: 잔체크-블랙"            → {잔체크, 블랙}
+ *   SS     "옵션: 잔체크 / 컬러: 블랙"    → {잔체크, 블랙}     (exact)
+ *   식스샵 "컬러: 그레이 / 사이즈: 230~270" → {그레이, 230, 270}
+ *   SS     "컬러: 그레이"                  → {그레이}            (SS ⊂ 식스샵)
+ */
+function tokenizeOption(opt: string): Set<string> {
+  if (!opt) return new Set();
+  const tokens = new Set<string>();
+  for (const group of opt.split(/\s*\/\s*/)) {
+    const colon = group.indexOf(":");
+    const value = colon === -1 ? group : group.slice(colon + 1);
+    const norm = value
+      .toLowerCase()
+      .replace(/->/g, " ")
+      .replace(/usb-?a/g, "usb");
+    for (const tok of norm.split(/[\s\-_()~,.]+/)) {
+      const t = tok.trim();
+      if (!t) continue;
+      if (t === "to" || t === "type" || t === "size" || t === "free") continue;
+      tokens.add(t);
+    }
+  }
+  return tokens;
+}
+
+function isSubset(a: Set<string>, b: Set<string>): boolean {
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+/** PP 매핑 시트: A=식스샵상품명, B=SS originProductNo */
+async function readSsProductMapping(): Promise<Map<string, string>> {
+  const sheets = getSheetsClient();
+  const spreadsheetId = config.sheets.sheetId;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  if (!meta.data.sheets?.some((s) => s.properties?.title === "PP 매핑")) {
+    return new Map();
+  }
+  const got = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `PP 매핑!A2:B`,
+  });
+  const map = new Map<string, string>();
+  for (const row of got.data.values ?? []) {
+    const name = String(row[0] ?? "").trim();
+    const ssId = String(row[1] ?? "").trim();
+    if (name && ssId) map.set(name, ssId);
+  }
+  return map;
+}
+
+interface SsLine { tokens: Set<string>; qty: number; }
+
+/** SS주문로그 → Map<ssId, SsLine[]> */
+async function readSsLinesByProduct(brand: Brand): Promise<Map<string, SsLine[]>> {
+  if (!brand.smartStore) return new Map();
+  const sheets = getSheetsClient();
+  const spreadsheetId = config.sheets.sheetId;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  if (!meta.data.sheets?.some((s) => s.properties?.title === brand.smartStore!.ssOrdersSheetName)) {
+    return new Map();
+  }
+  const got = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${brand.smartStore.ssOrdersSheetName}!F2:K`,
+  });
+  // F=옵션(0), G=SKU(1), H=수량(2), I=결제금액(3), J=수집일시(4), K=SS상품번호(5)
+  const map = new Map<string, SsLine[]>();
+  for (const row of got.data.values ?? []) {
+    const opt = String(row[0] ?? "");
+    const qty = Number(row[2]) || 0;
+    const ssId = String(row[5] ?? "").trim();
+    if (!ssId || qty === 0) continue;
+    if (!map.has(ssId)) map.set(ssId, []);
+    map.get(ssId)!.push({ tokens: tokenizeOption(opt), qty });
+  }
+  return map;
+}
+
+/**
+ * SS 라인들을 식스샵 row(옵션별)로 attribute.
+ * 매칭 우선순위: exact token set → SS ⊆ 식스샵 → 식스샵 ⊆ SS
+ * 후보 N개면 qty/N씩 균등 분배.
+ * 반환: Map<rowIndex(0-based in rows), 누적 SS qty>
+ */
+function attributeSsSalesToRows(
+  rows: ProductRow[],
+  productMap: Map<string, string>,
+  ssMap: Map<string, SsLine[]>,
+): Map<number, number> {
+  const result = new Map<number, number>();
+  const sixByProduct = new Map<string, { idx: number; tokens: Set<string> }[]>();
+  rows.forEach((p, i) => {
+    const ssId = productMap.get(p.productName);
+    if (!ssId) return;
+    if (!sixByProduct.has(ssId)) sixByProduct.set(ssId, []);
+    sixByProduct.get(ssId)!.push({ idx: i, tokens: tokenizeOption(p.optionText) });
+  });
+
+  let unmatched = 0;
+  for (const [ssId, lines] of ssMap) {
+    const candidates = sixByProduct.get(ssId);
+    if (!candidates || candidates.length === 0) continue;
+    for (const line of lines) {
+      let matched = candidates.filter(c => c.tokens.size === line.tokens.size && isSubset(c.tokens, line.tokens));
+      if (matched.length === 0) matched = candidates.filter(c => isSubset(line.tokens, c.tokens));
+      if (matched.length === 0) matched = candidates.filter(c => isSubset(c.tokens, line.tokens));
+      if (matched.length === 0) { unmatched++; continue; }
+      const share = line.qty / matched.length;
+      for (const t of matched) {
+        result.set(t.idx, (result.get(t.idx) ?? 0) + share);
+      }
+    }
+  }
+  if (unmatched > 0) console.log(`  [SS attribute] ${unmatched} lines unmatched (option mismatch within mapped products)`);
+  return result;
+}
+
 async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void> {
   const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
@@ -209,28 +332,58 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
     ? `'${brand.ordersSheetName}'`
     : brand.ordersSheetName;
 
-  // 옵션별 식스샵 뷰 (8-col). SS는 PP 매핑 시트가 product-level로 따로 보여줌
-  const header = [
-    "카테고리", "상품명", "옵션", "SKU",
-    `현재재고(${dateTag})`,
-    `판매수량(${dateTag})`,
-    "남은재고", "리오더 알림",
-  ];
+  // SS 있는 브랜드면 매핑 + SS 라인 로드 후 식스샵 옵션 행으로 attribute
+  const hasSs = !!brand.smartStore;
+  const ssProductMap = hasSs ? await readSsProductMapping() : new Map<string, string>();
+  const ssLinesByProduct = hasSs ? await readSsLinesByProduct(brand) : new Map<string, SsLine[]>();
+  const ssAttribByRowIdx = hasSs
+    ? attributeSsSalesToRows(rows, ssProductMap, ssLinesByProduct)
+    : new Map<number, number>();
+
+  // 8-col (no SS) / 9-col (with SS): SS 컬럼은 G에 옵션 정규화 매칭한 값을 정적으로 적재
+  const header = hasSs
+    ? [
+        "카테고리", "상품명", "옵션", "SKU",
+        `현재재고(${dateTag})`,
+        `식스샵 판매(${dateTag})`,
+        `스마트스토어 판매(${dateTag})`,
+        "남은재고", "리오더 알림",
+      ]
+    : [
+        "카테고리", "상품명", "옵션", "SKU",
+        `현재재고(${dateTag})`,
+        `판매수량(${dateTag})`,
+        "남은재고", "리오더 알림",
+      ];
 
   const values: (string | number)[][] = [header];
-  for (const p of rows) {
+  rows.forEach((p, i) => {
     const r = values.length + 1;
     // 식스샵 판매수량: 주문로그의 G열(수량) 합계, 옵션 있으면 (상품명+옵션) 매칭, 없으면 상품명만
-    const salesFormula = p.optionText
+    const sixshopFormula = p.optionText
       ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}), 0)`
       : `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`;
-    values.push([
-      p.category, p.productName, p.optionText, p.sku, p.stock,
-      salesFormula,
-      `=E${r}-F${r}`,
-      `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
-    ]);
-  }
+
+    if (hasSs) {
+      const raw = ssAttribByRowIdx.get(i) ?? 0;
+      // 균등 분배 결과가 소수면 소수점 1자리로 반올림 (시각적 단순화)
+      const ssQty = Math.round(raw * 10) / 10;
+      values.push([
+        p.category, p.productName, p.optionText, p.sku, p.stock,
+        sixshopFormula,
+        ssQty,
+        `=E${r}-F${r}-G${r}`,
+        `=IF(H${r}<=5, "⚠ 리오더", IF(H${r}<=10, "⚡ 임박", ""))`,
+      ]);
+    } else {
+      values.push([
+        p.category, p.productName, p.optionText, p.sku, p.stock,
+        sixshopFormula,
+        `=E${r}-F${r}`,
+        `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
+      ]);
+    }
+  });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `${brand.stockSheetName}!A1`,
