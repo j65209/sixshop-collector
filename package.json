@@ -12,12 +12,14 @@
     "postinstall": "playwright install --with-deps chromium"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "googleapis": "^144.0.0",
     "playwright": "^1.48.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.7.5",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3"

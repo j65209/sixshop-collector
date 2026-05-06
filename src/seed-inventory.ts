@@ -205,29 +205,57 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   });
 
   const dateTag = todayKstDateTag();
-  const header = [
-    "카테고리", "상품명", "옵션", "SKU",
-    `현재재고(${dateTag})`,
-    `판매수량(${dateTag})`,
-    "남은재고", "리오더 알림",
-  ];
-  const ordersRef = /[^가-힣A-Za-z0-9_]/.test(brand.ordersSheetName)
-    ? `'${brand.ordersSheetName}'`
-    : brand.ordersSheetName;
+  const sheetRef = (name: string): string =>
+    /[^가-힣A-Za-z0-9_]/.test(name) ? `'${name}'` : name;
+  const ordersRef = sheetRef(brand.ordersSheetName);
+  const ssOrdersRef = brand.smartStore
+    ? sheetRef(brand.smartStore.ssOrdersSheetName)
+    : null;
+
+  // 컬럼 구성: SS 있으면 식스샵판매·SS판매·남은재고·리오더(9col), 없으면 기존 8col
+  const header = ssOrdersRef
+    ? [
+        "카테고리", "상품명", "옵션", "SKU",
+        `현재재고(${dateTag})`,
+        `식스샵 판매(${dateTag})`,
+        `스마트스토어 판매(${dateTag})`,
+        "남은재고", "리오더 알림",
+      ]
+    : [
+        "카테고리", "상품명", "옵션", "SKU",
+        `현재재고(${dateTag})`,
+        `판매수량(${dateTag})`,
+        "남은재고", "리오더 알림",
+      ];
 
   const values: (string | number)[][] = [header];
   for (const p of rows) {
     const r = values.length + 1;
-    // 옵션 있으면 SUMIFS (상품명+옵션 매칭), 없으면 SUMIF (상품명만)
-    const salesFormula = p.optionText
+    // 식스샵 판매수량: 주문로그의 G열(수량) 합계, 옵션 있으면 (상품명+옵션) 매칭, 없으면 상품명만
+    const sixshopFormula = p.optionText
       ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}), 0)`
       : `=IFERROR(SUMIF(${ordersRef}!D:D, B${r}, ${ordersRef}!G:G), 0)`;
-    values.push([
-      p.category, p.productName, p.optionText, p.sku, p.stock,
-      salesFormula,
-      `=E${r}-F${r}`,
-      `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
-    ]);
+
+    if (ssOrdersRef) {
+      // SS 판매수량: SS주문로그의 H열(수량) 합계, 매칭 키는 (상품명+옵션) — 매칭 안 맞으면 SKU 매칭으로 변경 필요
+      const ssFormula = p.optionText
+        ? `=IFERROR(SUMIFS(${ssOrdersRef}!H:H, ${ssOrdersRef}!E:E, B${r}, ${ssOrdersRef}!F:F, C${r}), 0)`
+        : `=IFERROR(SUMIF(${ssOrdersRef}!E:E, B${r}, ${ssOrdersRef}!H:H), 0)`;
+      values.push([
+        p.category, p.productName, p.optionText, p.sku, p.stock,
+        sixshopFormula,
+        ssFormula,
+        `=E${r}-F${r}-G${r}`,
+        `=IF(H${r}<=5, "⚠ 리오더", IF(H${r}<=10, "⚡ 임박", ""))`,
+      ]);
+    } else {
+      values.push([
+        p.category, p.productName, p.optionText, p.sku, p.stock,
+        sixshopFormula,
+        `=E${r}-F${r}`,
+        `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
+      ]);
+    }
   }
   await sheets.spreadsheets.values.update({
     spreadsheetId,

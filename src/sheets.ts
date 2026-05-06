@@ -2,6 +2,7 @@ import { google, sheets_v4 } from "googleapis";
 import { config } from "./config.js";
 import type { Brand } from "./brands.js";
 import { ORDER_HEADER, type OrderRow } from "./types.js";
+import { SS_ORDER_HEADER, type SsOrderRow } from "./smartstore.js";
 
 let cached: sheets_v4.Sheets | null = null;
 
@@ -54,6 +55,37 @@ async function ensureSheet(name: string, headerRow?: (string | number)[]): Promi
 export async function ensureBrandSchema(brand: Brand): Promise<void> {
   await ensureSheet(brand.ordersSheetName, ORDER_HEADER as unknown as string[]);
   await ensureSheet(brand.stateSheetName, ["key", "value"]);
+  if (brand.smartStore) {
+    await ensureSheet(brand.smartStore.ssOrdersSheetName, SS_ORDER_HEADER as unknown as string[]);
+  }
+}
+
+export async function appendSmartStoreOrders(brand: Brand, rows: SsOrderRow[]): Promise<void> {
+  if (rows.length === 0 || !brand.smartStore) return;
+  const sheets = getClient();
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: config.sheets.sheetId,
+    range: `${brand.smartStore.ssOrdersSheetName}!A:A`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: rows as unknown as (string | number)[][] },
+  });
+}
+
+/** SS 주문로그에서 이미 적재된 productOrderId(B열) 집합 — dedup 용 */
+export async function readExistingSsOrderIds(brand: Brand): Promise<Set<string>> {
+  if (!brand.smartStore) return new Set();
+  const sheets = getClient();
+  const got = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheets.sheetId,
+    range: `${brand.smartStore.ssOrdersSheetName}!B2:B`,
+  });
+  const out = new Set<string>();
+  for (const row of got.data.values ?? []) {
+    const v = String(row[0] ?? "").trim();
+    if (v) out.add(v);
+  }
+  return out;
 }
 
 export async function appendOrders(brand: Brand, rows: OrderRow[]): Promise<void> {

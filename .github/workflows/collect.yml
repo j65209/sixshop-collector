@@ -22,7 +22,7 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci
+        run: npm install
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
@@ -37,6 +37,8 @@ jobs:
           SIXSHOP_PASSWORD_CLEARTYPE: ${{ secrets.SIXSHOP_PASSWORD_CLEARTYPE }}
           SIXSHOP_EMAIL_PP: ${{ secrets.SIXSHOP_EMAIL_PP }}
           SIXSHOP_PASSWORD_PP: ${{ secrets.SIXSHOP_PASSWORD_PP }}
+          NAVER_CLIENT_ID_PP: ${{ secrets.NAVER_CLIENT_ID_PP }}
+          NAVER_CLIENT_SECRET_PP: ${{ secrets.NAVER_CLIENT_SECRET_PP }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           STATE_SHEET_NAME: ${{ vars.STATE_SHEET_NAME || '_state' }}

@@ -1,9 +1,17 @@
 import { fetchOrdersForBrand, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
-import { appendOrders, ensureBrandSchema, readExistingKeys, setBrandState } from "./sheets.js";
+import {
+  appendOrders,
+  appendSmartStoreOrders,
+  ensureBrandSchema,
+  readExistingKeys,
+  readExistingSsOrderIds,
+  setBrandState,
+} from "./sheets.js";
 import { refreshInventoryForBrand } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
 import { type Brand, BRANDS } from "./brands.js";
 import type { OrderItem } from "./types.js";
+import { fetchSmartStoreOrders, ssRowKey, ssToRow } from "./smartstore.js";
 
 /** UTC Date → "YYYY-MM-DD HH:mm:ss" 형식의 KST 문자열 */
 function toKstString(d: Date): string {
@@ -44,6 +52,17 @@ async function main(): Promise<void> {
         await page.goto("https://www.sixshop.com/dashboard/shop-home", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
         await page.waitForTimeout(1500);
 
+        // 1.5) 스마트스토어 주문 수집 (smartStore 설정된 브랜드만)
+        if (brand.smartStore) {
+          try {
+            const ssAdded = await syncSmartStoreOrders(brand, startedAt);
+            console.log(`[${brand.displayName}] SS appended ${ssAdded} new line(s)`);
+          } catch (err) {
+            console.error(`[${brand.displayName}] SS failed:`, (err as Error).message);
+            brandErrors.push(`ss: ${(err as Error).message}`.slice(0, 80));
+          }
+        }
+
         // 2) 재고 새로고침
         try {
           await refreshInventoryForBrand(page, brand);
@@ -69,6 +88,24 @@ async function main(): Promise<void> {
   }
 
   if (anyError) process.exit(1);
+}
+
+async function syncSmartStoreOrders(brand: Brand, startedAt: Date): Promise<number> {
+  // 최근 1일치 결제완료 주문 fetch (cron 매일 1회 → 24h 윈도우 충분, 실패 대비 24h 중복 fetch 후 dedup)
+  const to = startedAt;
+  const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
+  const lines = await fetchSmartStoreOrders(brand, from, to);
+  if (lines.length === 0) {
+    console.log(`[${brand.displayName}] SS: no orders in window`);
+    return 0;
+  }
+  const existing = await readExistingSsOrderIds(brand);
+  const collectedAt = toKstString(startedAt);
+  const newRows = lines.filter((l) => !existing.has(ssRowKey(l))).map((l) => ssToRow(l, collectedAt));
+  if (newRows.length > 0) {
+    await appendSmartStoreOrders(brand, newRows);
+  }
+  return newRows.length;
 }
 
 async function appendNewOrders(brand: Brand, orders: OrderItem[], startedAt: Date): Promise<number> {

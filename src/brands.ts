@@ -15,6 +15,13 @@ export interface Brand {
   includeStatuses: string[];
   /** 환경변수 suffix. "" → SIXSHOP_EMAIL, "_CLEARTYPE" → SIXSHOP_EMAIL_CLEARTYPE */
   credEnvSuffix: string;
+  /** 스마트스토어 연동 설정 (있는 브랜드만) */
+  smartStore?: {
+    /** SS 주문로그 시트 탭 이름 */
+    ssOrdersSheetName: string;
+    /** Naver Commerce API 자격증명 env suffix. "_PP" → NAVER_CLIENT_ID_PP / NAVER_CLIENT_SECRET_PP */
+    credEnvSuffix: string;
+  };
 }
 
 export const BRANDS: Brand[] = [
@@ -47,6 +54,10 @@ export const BRANDS: Brand[] = [
     stateSheetName: "PP _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_PP",
+    smartStore: {
+      ssOrdersSheetName: "PP SS주문로그",
+      credEnvSuffix: "_PP",
+    },
   },
 ];
 
