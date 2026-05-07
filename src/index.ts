@@ -34,12 +34,19 @@ async function main(): Promise<void> {
       try {
         await loginAsBrand(page, brand);
 
-        // 1) 주문 수집
+        // 1) 주문 수집 (식스샵 다운로드는 가끔 timeout — 1회 재시도)
         try {
-          const orders = await fetchOrdersForBrand(page, brand);
+          let orders;
+          try {
+            orders = await fetchOrdersForBrand(page, brand);
+          } catch (err1) {
+            console.warn(`[${brand.displayName}] orders attempt 1 failed: ${(err1 as Error).message} — retry in 10s`);
+            await page.waitForTimeout(10_000);
+            orders = await fetchOrdersForBrand(page, brand);
+          }
           newRowsCount = await appendNewOrders(brand, orders, startedAt);
         } catch (err) {
-          console.error(`[${brand.displayName}] orders failed:`, (err as Error).message);
+          console.error(`[${brand.displayName}] orders failed (after retry):`, (err as Error).message);
           brandErrors.push(`orders: ${(err as Error).message}`.slice(0, 80));
         }
 

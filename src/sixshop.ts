@@ -64,7 +64,7 @@ export async function downloadProductsCsv(page: Page): Promise<string> {
   await page.waitForSelector("#downloadAllProductsBtn", { timeout: 30_000 });
   await page.waitForTimeout(2000);
 
-  const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
+  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
   await page.locator("#downloadAllProductsBtn").click();
   const download = await downloadPromise;
 
@@ -139,7 +139,7 @@ async function downloadOrdersXlsx(page: Page, brand: Brand): Promise<string> {
   await page.locator("#excelListAllAdd").click();
   await page.waitForTimeout(500);
 
-  const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+  const downloadPromise = page.waitForEvent("download", { timeout: 240_000 });
   await page.locator("#orderExcelDownloadBtn").click({ force: true });
   const download = await downloadPromise;
 

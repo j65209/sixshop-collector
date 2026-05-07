@@ -118,9 +118,15 @@ async function readSsLines(ssOrdersSheet: string, lastRunAt: string | null): Pro
     spreadsheetId: config.sheets.sheetId,
     range: `${ssOrdersSheet}!C2:K`,
   });
+  // C=주문일시(0), D=상태(1), E=상품명(2), F=옵션(3), G=SKU(4), H=수량(5), I=결제금액(6), J=수집일시(7), K=SS상품번호(8)
   for (const row of got.data.values ?? []) {
     const orderedAt = String(row[0] ?? "");
     if (!orderedAt || orderedAt <= lastRunAt) continue;
+    const status = String(row[1] ?? "").trim();
+    // 비-판매 상태 제외 (취소/반품/미결제취소/교환). vm-pp-cycle 며칠 안 돌리면 그 사이 취소된 주문이 어제 판매로 잡힐 위험 차단.
+    if (status === "CANCELED" || status === "RETURNED" || status === "CANCELED_BY_NOPAYMENT" || status === "EXCHANGED") {
+      continue;
+    }
     const opt = String(row[3] ?? "");
     const qty = Number(row[5]) || 0;
     const ssId = String(row[8] ?? "").trim();
