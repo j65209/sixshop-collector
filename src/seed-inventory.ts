@@ -360,12 +360,12 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
     range: `${brand.stockSheetName}!A:Z`,
   });
 
-  const dateTag = todayKstDateTag();
   // 단일 채널(6A/CT) 7열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
-  // 어제 판매는 lastRunAt~now 사이 결제완료 주문을 코드에서 직접 합산한 값 (수식 X — SUMIFS 0 버그 차단).
+  // 어제 판매는 lastRunAt~now 사이 결제완료 주문을 코드에서 직접 합산한 값.
+  // 갱신 시각은 헤더가 아닌 J1 "최신화: ..."에 표시.
   const header = [
     "카테고리", "상품명", "옵션", "SKU",
-    `어제 판매(${dateTag})`,
+    "어제 판매",
     "남은재고",
     "리오더 알림",
   ];
