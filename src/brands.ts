@@ -52,13 +52,13 @@ export const BRANDS: Brand[] = [
     displayName: "Produktepr",
     memberNo: 211642,
     ordersSheetName: "PP 주문로그",
-    stockSheetName: "PP 재고마스터",
+    // GHA cron은 식스샵 옵션별 재고/판매를 "PP 식스샵 재고마스터"(hidden raw)에 박음.
+    // VM cron이 그 시트 + SS API 데이터를 token 매칭해서 사장님이 보는 "PP 재고마스터" dashboard 갱신.
+    stockSheetName: "PP 식스샵 재고마스터",
     stateSheetName: "PP _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_PP",
-    // PP는 식스샵+SS 멀티채널. VM cron(refresh-pp-master)이 PP 재고마스터를 단일 dashboard로 갱신.
-    // GHA cron의 옵션별 재고마스터 모델은 PP에 안 맞음 → inventoryEnabled=false.
-    inventoryEnabled: false,
+    inventoryEnabled: true,
     smartStore: {
       ssOrdersSheetName: "PP SS주문로그",
       credEnvSuffix: "_PP",

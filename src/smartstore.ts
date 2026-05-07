@@ -254,10 +254,81 @@ export async function fetchSmartStoreOrders(
 }
 
 /**
- * 모든 판매 가능 SS 상품의 (originProductNo → totalStockQuantity) 맵.
- * /v1/products/search로 page 별 100개씩 받아서 모든 상품 stockQuantity 수집.
- * channelProducts[0].stockQuantity가 통합 재고 (옵션 합).
+ * SS 옵션 조합 (옵션값들 / join + stockQuantity).
+ * 식스샵 옵션과 token 매칭에 사용.
  */
+export interface SsOptionCombo {
+  /** "블랙 / 1m" 형태 — 옵션값을 ' / '로 join (옵션이름은 빠짐, token 매칭이 흡수) */
+  optionText: string;
+  stockQuantity: number;
+}
+
+/**
+ * 모든 판매 가능 SS 상품의 옵션별 재고.
+ * 반환: Map<originProductNo, { totalStock, optionCombos: SsOptionCombo[] }>
+ *
+ * 옵션 없는 상품: optionCombos 빈 배열, totalStock에 channelProducts[0].stockQuantity.
+ * 옵션 있는 상품: optionCombos에 각 조합. totalStock은 합.
+ */
+export interface SsProductStock {
+  totalStock: number;
+  optionCombos: SsOptionCombo[];
+}
+
+export async function fetchSmartStoreProductStocks(brand: Brand): Promise<Map<string, SsProductStock>> {
+  const creds = smartStoreCreds(brand);
+  const token = await getAccessToken(creds);
+  const result = new Map<string, SsProductStock>();
+
+  for (let page = 1; page <= 50; page++) {
+    const r = await fetchWithRetry(`${BASE_URL}/v1/products/search`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ size: 100, page }),
+    });
+    if (!r.ok) {
+      throw new Error(`SS products/search failed: ${r.status} ${await r.text()}`);
+    }
+    const data = (await r.json()) as {
+      contents?: Array<{
+        originProductNo: number | string;
+        channelProducts?: Array<{
+          stockQuantity?: number;
+          statusType?: string;
+          optionInfo?: {
+            optionCombinations?: Array<{
+              optionName1?: string;
+              optionName2?: string;
+              optionName3?: string;
+              stockQuantity?: number;
+            }>;
+          };
+        }>;
+      }>;
+    };
+    const contents = data.contents ?? [];
+    if (contents.length === 0) break;
+    for (const c of contents) {
+      const cp = c.channelProducts?.[0];
+      const totalStock = Number(cp?.stockQuantity) || 0;
+      const combos: SsOptionCombo[] = (cp?.optionInfo?.optionCombinations ?? [])
+        .map((co) => {
+          const parts = [co.optionName1, co.optionName2, co.optionName3].filter(Boolean).map((s) => String(s).trim());
+          return {
+            optionText: parts.join(" / "),
+            stockQuantity: Number(co.stockQuantity) || 0,
+          };
+        })
+        .filter((c) => c.optionText);
+      result.set(String(c.originProductNo), { totalStock, optionCombos: combos });
+    }
+    if (contents.length < 100) break;
+    await sleep(800);
+  }
+  return result;
+}
+
+/** 기존 호환: 상품 단위 stock 합만 반환 */
 export async function fetchSmartStoreStocks(brand: Brand): Promise<Map<string, number>> {
   const creds = smartStoreCreds(brand);
   const token = await getAccessToken(creds);
