@@ -49,6 +49,8 @@ function tokenizeOption(opt: string): Set<string> {
       const t = tok.trim();
       if (!t) continue;
       if (t === "to" || t === "type" || t === "size" || t === "free" || t === "color") continue;
+      // 사이즈 부가 표기 (성별 라벨) — 식스샵 "여성" vs SS "여성용" 등 한 글자 차이로 mismatch나는 케이스 흡수
+      if (t === "여성" || t === "여성용" || t === "남성" || t === "남성용" || t === "남녀공용" || t === "공용") continue;
       tokens.add(t);
     }
   }
@@ -252,9 +254,11 @@ async function main(): Promise<void> {
   for (let i = 0; i < sixRows.length; i++) {
     const r = sixRows[i];
     const sixSale = r.yesterdaySales;
-    const ssSale = Math.round((salesAttr.attributedByRowIdx.get(i) ?? 0) * 10) / 10;
+    // 옵션 1:N 매칭 균등 분배의 결과는 소수가 나오므로 정수로 반올림 (시각적 단순화).
+    // 합계가 ±1 어긋날 수 있으나 채널별 옵션 분배 자체가 추정이라 허용.
+    const ssSale = Math.round(salesAttr.attributedByRowIdx.get(i) ?? 0);
     const sixStock = r.stock;
-    const ssStock = Math.round((stockAttr.attributedByRowIdx.get(i) ?? 0) * 10) / 10;
+    const ssStock = Math.round(stockAttr.attributedByRowIdx.get(i) ?? 0);
     const totalSale = sixSale + ssSale;
     const totalStock = sixStock + ssStock;
     const rowR = i + 2;

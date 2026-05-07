@@ -278,8 +278,10 @@ export interface SsProductStock {
 export async function fetchSmartStoreProductStocks(brand: Brand): Promise<Map<string, SsProductStock>> {
   const creds = smartStoreCreds(brand);
   const token = await getAccessToken(creds);
-  const result = new Map<string, SsProductStock>();
 
+  // 1단계: products/search로 판매중(SALE) 상품의 originProductNo 수집.
+  // search 응답은 옵션 정보를 안 주므로 ID만 받고 단건 조회로 옵션별 재고 가져옴.
+  const ids: string[] = [];
   for (let page = 1; page <= 50; page++) {
     const r = await fetchWithRetry(`${BASE_URL}/v1/products/search`, {
       method: "POST",
@@ -292,38 +294,73 @@ export async function fetchSmartStoreProductStocks(brand: Brand): Promise<Map<st
     const data = (await r.json()) as {
       contents?: Array<{
         originProductNo: number | string;
-        channelProducts?: Array<{
-          stockQuantity?: number;
-          statusType?: string;
-          optionInfo?: {
-            optionCombinations?: Array<{
-              optionName1?: string;
-              optionName2?: string;
-              optionName3?: string;
-              stockQuantity?: number;
-            }>;
-          };
-        }>;
+        channelProducts?: Array<{ statusType?: string }>;
       }>;
     };
     const contents = data.contents ?? [];
     if (contents.length === 0) break;
     for (const c of contents) {
-      const cp = c.channelProducts?.[0];
-      const totalStock = Number(cp?.stockQuantity) || 0;
-      const combos: SsOptionCombo[] = (cp?.optionInfo?.optionCombinations ?? [])
-        .map((co) => {
-          const parts = [co.optionName1, co.optionName2, co.optionName3].filter(Boolean).map((s) => String(s).trim());
-          return {
-            optionText: parts.join(" / "),
-            stockQuantity: Number(co.stockQuantity) || 0,
-          };
-        })
-        .filter((c) => c.optionText);
-      result.set(String(c.originProductNo), { totalStock, optionCombos: combos });
+      const status = c.channelProducts?.[0]?.statusType;
+      if (status !== "SALE") continue;
+      ids.push(String(c.originProductNo));
     }
     if (contents.length < 100) break;
     await sleep(800);
+  }
+
+  // 2단계: 각 originProductNo 단건 조회로 옵션조합별 stockQuantity fetch (5 병렬).
+  // 응답: originProduct.{stockQuantity, detailAttribute.optionInfo.optionCombinations[]}
+  const result = new Map<string, SsProductStock>();
+  for (let i = 0; i < ids.length; i += 5) {
+    const batch = ids.slice(i, i + 5);
+    await Promise.all(
+      batch.map(async (id) => {
+        try {
+          const resp = await fetchWithRetry(`${BASE_URL}/v2/products/origin-products/${id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!resp.ok) {
+            console.warn(`  SS stock fetch ${id} failed: ${resp.status}`);
+            return;
+          }
+          const data = (await resp.json()) as {
+            originProduct?: {
+              stockQuantity?: number;
+              detailAttribute?: {
+                optionInfo?: {
+                  optionCombinations?: Array<{
+                    optionName1?: string;
+                    optionName2?: string;
+                    optionName3?: string;
+                    stockQuantity?: number;
+                  }>;
+                };
+              };
+            };
+          };
+          const op = data.originProduct;
+          const totalStock = Number(op?.stockQuantity) || 0;
+          const combos: SsOptionCombo[] = (op?.detailAttribute?.optionInfo?.optionCombinations ?? [])
+            .map((co) => {
+              const parts = [co.optionName1, co.optionName2, co.optionName3]
+                .filter(Boolean)
+                .map((s) => String(s).trim());
+              return {
+                optionText: parts.join(" / "),
+                stockQuantity: Number(co.stockQuantity) || 0,
+              };
+            })
+            .filter((c) => c.optionText);
+          if (process.env.SS_DEBUG === "1" && i === 0) {
+            console.log(`[SS stock debug] ${id} totalStock=${totalStock} combos=${combos.length}`);
+          }
+          result.set(id, { totalStock, optionCombos: combos });
+        } catch (e) {
+          console.warn(`  SS stock fetch ${id} error: ${(e as Error).message}`);
+        }
+      }),
+    );
+    if (i + 5 < ids.length) await sleep(1000);
   }
   return result;
 }

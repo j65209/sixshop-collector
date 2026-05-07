@@ -25,7 +25,7 @@ const MAPPING: Record<string, number | null> = {
   "Toy Screw Hook (Set)": 12659711603,
   "Pixel Mini Handle Pouch (4color)": 12434723552,
   "Compact Phone Stand (6color)": 12659544857,
-  "Ball hanger (6color)": null,
+  "Ball hanger (6color)": 12434549462,
   "STAINLESS STEEL TRAY (silver)": 11779969107,
   "1+1 Silk Scrunch (9color)": 11525494276,
   "Basic Toliet Slippers (6color)": 13316409005,
