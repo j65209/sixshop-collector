@@ -56,7 +56,8 @@ export const BRANDS: Brand[] = [
     stateSheetName: "PP _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_PP",
-    // 식스샵+SS 멀티채널. 옵션 매칭 검증 전까지 재고 갱신 보류 (주문 수집은 정상 진행).
+    // PP는 식스샵+SS 멀티채널. VM cron(refresh-pp-master)이 PP 재고마스터를 단일 dashboard로 갱신.
+    // GHA cron의 옵션별 재고마스터 모델은 PP에 안 맞음 → inventoryEnabled=false.
     inventoryEnabled: false,
     smartStore: {
       ssOrdersSheetName: "PP SS주문로그",

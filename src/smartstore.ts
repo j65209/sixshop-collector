@@ -253,6 +253,45 @@ export async function fetchSmartStoreOrders(
   }));
 }
 
+/**
+ * 모든 판매 가능 SS 상품의 (originProductNo → totalStockQuantity) 맵.
+ * /v1/products/search로 page 별 100개씩 받아서 모든 상품 stockQuantity 수집.
+ * channelProducts[0].stockQuantity가 통합 재고 (옵션 합).
+ */
+export async function fetchSmartStoreStocks(brand: Brand): Promise<Map<string, number>> {
+  const creds = smartStoreCreds(brand);
+  const token = await getAccessToken(creds);
+  const result = new Map<string, number>();
+
+  for (let page = 1; page <= 50; page++) {
+    const r = await fetchWithRetry(`${BASE_URL}/v1/products/search`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ size: 100, page }),
+    });
+    if (!r.ok) {
+      throw new Error(`SS products/search failed: ${r.status} ${await r.text()}`);
+    }
+    const data = (await r.json()) as {
+      contents?: Array<{
+        originProductNo: number | string;
+        channelProducts?: Array<{ stockQuantity?: number; statusType?: string }>;
+      }>;
+      totalElements?: number;
+    };
+    const contents = data.contents ?? [];
+    if (contents.length === 0) break;
+    for (const c of contents) {
+      const cp = c.channelProducts?.[0];
+      const stock = Number(cp?.stockQuantity) || 0;
+      result.set(String(c.originProductNo), stock);
+    }
+    if (contents.length < 100) break;
+    await sleep(800); // rate limit 보호
+  }
+  return result;
+}
+
 /** 시트에 적재할 행 형식. K열 SS상품번호(originProductNo) — 식스샵 매핑용 */
 export const SS_ORDER_HEADER = [
   "주문번호", "상품주문번호", "주문일시", "상태", "상품명", "옵션",
