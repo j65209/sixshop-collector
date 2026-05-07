@@ -1,5 +1,5 @@
 import { fetchOrdersForBrand, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
-import { appendOrders, ensureBrandSchema, readExistingKeys, setBrandState } from "./sheets.js";
+import { appendOrders, ensureBrandSchema, getBrandState, readExistingKeys, setBrandState } from "./sheets.js";
 import { refreshInventoryForBrand } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
 import { type Brand, BRANDS } from "./brands.js";
@@ -27,6 +27,9 @@ async function main(): Promise<void> {
         brandErrors.push(`schema: ${(e as Error).message}`);
       });
 
+      // 어제 판매 계산용. 직전 cron 시각 ~ 지금 사이 식스샵 주문을 차감 윈도우로 사용.
+      const lastRunAt = await getBrandState(brand, "last_run_at").catch(() => null);
+
       const page = await newBrandPage(browser);
       try {
         await loginAsBrand(page, brand);
@@ -46,12 +49,16 @@ async function main(): Promise<void> {
 
         // 스마트스토어 sync는 IP 화이트리스트 때문에 GHA에서 못 돌림 — `npm run sync-ss`를 사용자 PC에서 실행
 
-        // 2) 재고 새로고침
-        try {
-          await refreshInventoryForBrand(page, brand);
-        } catch (err) {
-          console.error(`[${brand.displayName}] inventory failed:`, (err as Error).message);
-          brandErrors.push(`inv: ${(err as Error).message}`.slice(0, 80));
+        // 2) 재고 새로고침 (멀티채널 브랜드는 매핑 작업 전까지 보류 — 주문 수집은 그대로)
+        if (brand.inventoryEnabled) {
+          try {
+            await refreshInventoryForBrand(page, brand, lastRunAt);
+          } catch (err) {
+            console.error(`[${brand.displayName}] inventory failed:`, (err as Error).message);
+            brandErrors.push(`inv: ${(err as Error).message}`.slice(0, 80));
+          }
+        } else {
+          console.log(`[${brand.displayName}] inventory refresh skipped (inventoryEnabled=false)`);
         }
       } finally {
         await page.context().close();

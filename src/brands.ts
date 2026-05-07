@@ -15,11 +15,11 @@ export interface Brand {
   includeStatuses: string[];
   /** 환경변수 suffix. "" → SIXSHOP_EMAIL, "_CLEARTYPE" → SIXSHOP_EMAIL_CLEARTYPE */
   credEnvSuffix: string;
-  /** 스마트스토어 연동 설정 (있는 브랜드만) */
+  /** false면 cron에서 재고마스터 갱신 스킵 (주문 수집은 그대로). 멀티채널 매칭 전 임시. */
+  inventoryEnabled: boolean;
+  /** 스마트스토어 연동 설정 (있는 브랜드만). 매핑 완성 전엔 inventoryEnabled=false로 사용 보류. */
   smartStore?: {
-    /** SS 주문로그 시트 탭 이름 */
     ssOrdersSheetName: string;
-    /** Naver Commerce API 자격증명 env suffix. "_PP" → NAVER_CLIENT_ID_PP / NAVER_CLIENT_SECRET_PP */
     credEnvSuffix: string;
   };
 }
@@ -34,6 +34,7 @@ export const BRANDS: Brand[] = [
     stateSheetName: "6A _state",
     includeStatuses: ["판매 중"],
     credEnvSuffix: "",
+    inventoryEnabled: true,
   },
   {
     siteLink: "cleartype",
@@ -44,6 +45,7 @@ export const BRANDS: Brand[] = [
     stateSheetName: "CT _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_CLEARTYPE",
+    inventoryEnabled: true,
   },
   {
     siteLink: "produktepr",
@@ -54,6 +56,8 @@ export const BRANDS: Brand[] = [
     stateSheetName: "PP _state",
     includeStatuses: ["판매 중", "품절"],
     credEnvSuffix: "_PP",
+    // 식스샵+SS 멀티채널. 옵션 매칭 검증 전까지 재고 갱신 보류 (주문 수집은 정상 진행).
+    inventoryEnabled: false,
     smartStore: {
       ssOrdersSheetName: "PP SS주문로그",
       credEnvSuffix: "_PP",

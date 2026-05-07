@@ -176,25 +176,36 @@ function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
-async function readExistingStocks(stockSheetName: string): Promise<Map<string, number>> {
-  // 키: `${상품명}::${옵션}` — 옵션별 수동 입력 보존
+/**
+ * 주문로그에서 (last_run_at, now] 사이의 (상품명, 옵션)별 판매수량 합계.
+ * 옵션 비교는 trim해서 좌우 공백 차이 흡수.
+ * lastRunAt이 null이면 빈 Map (첫 회 실행 — 차감 없이 시드만).
+ */
+async function computeSalesByKey(
+  brand: Brand,
+  lastRunAt: string | null,
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (!lastRunAt) return result;
+
   const sheets = getSheetsClient();
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: config.sheets.sheetId });
-  if (!meta.data.sheets?.some((s) => s.properties?.title === stockSheetName)) {
-    return new Map();
-  }
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheets.sheetId,
-    range: `${stockSheetName}!B2:E`,
+    range: `${brand.ordersSheetName}!A2:G`,
   });
-  const map = new Map<string, number>();
   for (const row of got.data.values ?? []) {
-    const name = String(row[0] ?? "").trim();
-    const opt = String(row[1] ?? "").trim();
-    const stock = Number(row[3]) || 0;
-    if (name) map.set(`${name}::${opt}`, stock);
+    const orderedAt = String(row[1] ?? "");
+    if (!orderedAt || orderedAt <= lastRunAt) continue;
+    const status = String(row[2] ?? "").trim();
+    if (status !== "결제 완료") continue; // 취소/환불 제외, 결제완료만 판매로 카운트
+    const name = String(row[3] ?? "").trim();
+    const opt = String(row[4] ?? "").trim();
+    const qty = Number(row[6]) || 0;
+    if (!name || !qty) continue;
+    const key = `${name}::${opt}`;
+    result.set(key, (result.get(key) ?? 0) + qty);
   }
-  return map;
+  return result;
 }
 
 /**
@@ -328,7 +339,7 @@ function attributeSsSalesToRows(
   return result;
 }
 
-async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void> {
+async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Map<string, number>): Promise<void> {
   const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
 
@@ -350,64 +361,29 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   });
 
   const dateTag = todayKstDateTag();
-  const winTag = windowDateTag();
-  const winStart = windowStartKstString();
-  const ordersRef = /[^가-힣A-Za-z0-9_]/.test(brand.ordersSheetName)
-    ? `'${brand.ordersSheetName}'`
-    : brand.ordersSheetName;
-
-  // SS 있는 브랜드면 매핑 + 24h 윈도우 SS 라인 로드 후 식스샵 옵션 행으로 attribute
-  const hasSs = !!brand.smartStore;
-  const ssProductMap = hasSs ? await readSsProductMapping() : new Map<string, string>();
-  const ssLinesByProduct = hasSs ? await readSsLinesByProduct(brand, winStart) : new Map<string, SsLine[]>();
-  const ssAttribByRowIdx = hasSs
-    ? attributeSsSalesToRows(rows, ssProductMap, ssLinesByProduct)
-    : new Map<number, number>();
-
-  // 8-col (no SS) / 9-col (with SS): 판매 컬럼들은 24h 윈도우(어제~오늘)만 합산.
-  // 현재재고는 mall API의 실시간 재고이므로 윈도우 누적과 짝맞음 (남은재고 = 현재재고 - 24h판매).
-  const header = hasSs
-    ? [
-        "카테고리", "상품명", "옵션", "SKU",
-        `현재재고(${dateTag})`,
-        `식스샵 판매(${winTag})`,
-        `스마트스토어 판매(${winTag})`,
-        "남은재고", "리오더 알림",
-      ]
-    : [
-        "카테고리", "상품명", "옵션", "SKU",
-        `현재재고(${dateTag})`,
-        `판매수량(${winTag})`,
-        "남은재고", "리오더 알림",
-      ];
+  // 단일 채널(6A/CT) 7열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
+  // 어제 판매는 lastRunAt~now 사이 결제완료 주문을 코드에서 직접 합산한 값 (수식 X — SUMIFS 0 버그 차단).
+  const header = [
+    "카테고리", "상품명", "옵션", "SKU",
+    `어제 판매(${dateTag})`,
+    "남은재고",
+    "리오더 알림",
+  ];
 
   const values: (string | number)[][] = [header];
-  rows.forEach((p, i) => {
+  rows.forEach((p) => {
     const r = values.length + 1;
-    // 식스샵 판매수량: 24h 윈도우(주문일시 B열 >= winStart). 옵션 있으면 (상품명+옵션+날짜), 없으면 (상품명+날짜).
-    const sixshopFormula = p.optionText
-      ? `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!E:E, C${r}, ${ordersRef}!B:B, ">=${winStart}"), 0)`
-      : `=IFERROR(SUMIFS(${ordersRef}!G:G, ${ordersRef}!D:D, B${r}, ${ordersRef}!B:B, ">=${winStart}"), 0)`;
-
-    if (hasSs) {
-      const raw = ssAttribByRowIdx.get(i) ?? 0;
-      // 균등 분배 결과가 소수면 소수점 1자리로 반올림 (시각적 단순화)
-      const ssQty = Math.round(raw * 10) / 10;
-      values.push([
-        p.category, p.productName, p.optionText, p.sku, p.stock,
-        sixshopFormula,
-        ssQty,
-        `=E${r}-F${r}-G${r}`,
-        `=IF(H${r}<=5, "⚠ 리오더", IF(H${r}<=10, "⚡ 임박", ""))`,
-      ]);
-    } else {
-      values.push([
-        p.category, p.productName, p.optionText, p.sku, p.stock,
-        sixshopFormula,
-        `=E${r}-F${r}`,
-        `=IF(G${r}<=5, "⚠ 리오더", IF(G${r}<=10, "⚡ 임박", ""))`,
-      ]);
-    }
+    const sold = salesByKey.get(`${p.productName}::${p.optionText}`) ?? 0;
+    const remaining = p.stock; // mall API 또는 CSV의 현재 재고 = 단일 채널의 진짜 남은재고
+    values.push([
+      p.category,
+      p.productName,
+      p.optionText,
+      p.sku,
+      sold,
+      remaining,
+      `=IF(F${r}<=5, "⚠ 리오더", IF(F${r}<=10, "⚡ 임박", ""))`,
+    ]);
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
@@ -448,7 +424,11 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[]): Promise<void>
   }
 }
 
-export async function refreshInventoryForBrand(page: Page, brand: Brand): Promise<{ total: number }> {
+export async function refreshInventoryForBrand(
+  page: Page,
+  brand: Brand,
+  lastRunAt: string | null,
+): Promise<{ total: number }> {
   const path = await downloadProductsCsv(page);
   try {
     const all = parseProducts(path);
@@ -481,26 +461,20 @@ export async function refreshInventoryForBrand(page: Page, brand: Brand): Promis
       }
     }
 
-    // 수동 입력 보존: 옵션별로 (상품명+옵션) 키 매칭. mall API 값 우선.
-    const existing = await readExistingStocks(brand.stockSheetName);
+    // 단일 채널(6A/CT): mall API의 옵션별 재고 = 진짜 남은재고. CSV stock(상품 합계)은 fallback.
     const final = expanded.map((p) => {
-      const key = `${p.productName}::${p.optionText}`;
       const fromApi = optionStocksByProduct.get(p.productNo)?.get(p.optionText);
-      let stock = p.stock;
-      if (p.optionText) {
-        stock = fromApi ?? existing.get(key) ?? 0;
-      } else {
-        stock = p.stock > 0 ? p.stock : (existing.get(key) ?? 0);
-      }
+      const stock = p.optionText ? (fromApi ?? 0) : p.stock;
       return { ...p, stock };
     });
 
-    // 최종 stock 적용 후 재고 많은 순 정렬 (mall API 값 반영됨)
     final.sort((a, b) => b.stock - a.stock);
 
-    await pushToStockSheet(brand, final);
+    const salesByKey = await computeSalesByKey(brand, lastRunAt);
+    await pushToStockSheet(brand, final, salesByKey);
     const apiCount = [...optionStocksByProduct.values()].reduce((a, m) => a + m.size, 0);
-    console.log(`[${brand.displayName}] inventory refreshed: products=${filtered.length}, rows=${final.length}, 옵션재고 from API=${apiCount}`);
+    const soldTotal = [...salesByKey.values()].reduce((a, n) => a + n, 0);
+    console.log(`[${brand.displayName}] inventory refreshed: rows=${final.length}, 옵션재고 from API=${apiCount}, 어제판매합=${soldTotal} (since ${lastRunAt ?? "first-run"})`);
     return { total: final.length };
   } finally {
     await unlink(path).catch(() => {});
@@ -509,13 +483,19 @@ export async function refreshInventoryForBrand(page: Page, brand: Brand): Promis
 
 // 수동 실행: `npm run seed-inventory`
 async function main(): Promise<void> {
+  const { getBrandState } = await import("./sheets.js");
   const browser = await newBrowser();
   try {
     for (const brand of BRANDS) {
+      if (!brand.inventoryEnabled) {
+        console.log(`[${brand.displayName}] skipped (inventoryEnabled=false)`);
+        continue;
+      }
+      const lastRunAt = await getBrandState(brand, "last_run_at").catch(() => null);
       const page = await newBrandPage(browser);
       try {
         await loginAsBrand(page, brand);
-        await refreshInventoryForBrand(page, brand);
+        await refreshInventoryForBrand(page, brand, lastRunAt);
       } finally {
         await page.context().close();
       }
