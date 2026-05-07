@@ -60,3 +60,30 @@ jobs:
             *.html
           if-no-files-found: ignore
           retention-days: 5
+
+  pp-smartstore:
+    # 2단계 — PP 스마트스토어 동기화 + PP 재고마스터 작성
+    # 네이버 SmartStore API가 사장님 PC IP 화이트리스트라 self-hosted runner에서만 가능
+    needs: collect
+    runs-on: [self-hosted, windows, brightbeed]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps (skip Playwright browsers)
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm install --ignore-scripts
+        shell: cmd
+
+      - name: Run PP SmartStore sync + refresh master
+        env:
+          SIXSHOP_EMAIL_PP: ${{ secrets.SIXSHOP_EMAIL_PP }}
+          SIXSHOP_PASSWORD_PP: ${{ secrets.SIXSHOP_PASSWORD_PP }}
+          NAVER_CLIENT_ID_PP: ${{ secrets.NAVER_CLIENT_ID_PP }}
+          NAVER_CLIENT_SECRET_PP: ${{ secrets.NAVER_CLIENT_SECRET_PP }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          STATE_SHEET_NAME: ${{ vars.STATE_SHEET_NAME || '_state' }}
+        run: npm run vm-pp-cycle
+        shell: cmd
