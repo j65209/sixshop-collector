@@ -66,7 +66,6 @@ interface RawRow {
   category: string;
   productName: string;
   optionText: string;
-  sku: string;
   yesterdaySales: number;
   stock: number;
   // 토큰 캐시
@@ -74,10 +73,11 @@ interface RawRow {
 }
 
 async function readRawSheet(sheetName: string): Promise<RawRow[]> {
+  // raw "PP 식스샵 재고마스터" 컬럼 (SKU 제거 후): A=카테고리, B=상품명, C=옵션, D=실시간결제완료, E=남은재고, F=리오더
   const sheets = getSheetsClient();
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheets.sheetId,
-    range: `${sheetName}!A2:G`,
+    range: `${sheetName}!A2:F`,
     valueRenderOption: "UNFORMATTED_VALUE",
   });
   return (got.data.values ?? [])
@@ -86,9 +86,8 @@ async function readRawSheet(sheetName: string): Promise<RawRow[]> {
       category: String(r[0] ?? ""),
       productName: String(r[1] ?? "").trim(),
       optionText: String(r[2] ?? "").trim(),
-      sku: String(r[3] ?? ""),
-      yesterdaySales: Number(r[4]) || 0,
-      stock: Number(r[5]) || 0,
+      yesterdaySales: Number(r[3]) || 0,
+      stock: Number(r[4]) || 0,
     }));
 }
 
@@ -250,8 +249,9 @@ async function main(): Promise<void> {
   }
   const sheetId = sheetMeta?.properties?.sheetId;
 
-  // 9-col 옵션 단위 schema — 식스샵/SS 분리 (합산 X). 결제완료 = 발송대기 (운송장 출력 전) 라이브 카운트.
-  const header = ["카테고리", "상품명", "옵션", "SKU", "식스샵 결제완료", "SS 결제완료", "식스샵 재고", "SS 재고", "리오더 알림"];
+  // 8-col 옵션 단위 schema (SKU 제거) — 식스샵/SS 분리 (합산 X). 실시간 결제완료 = 발송대기 (운송장 출력 전) 라이브 카운트.
+  // 컬럼: A=카테고리 B=상품명 C=옵션 D=식스샵실시간결제완료 E=SS실시간결제완료 F=식스샵재고 G=SS재고 H=리오더
+  const header = ["카테고리", "상품명", "옵션", "식스샵 실시간 결제완료", "SS 실시간 결제완료", "식스샵 재고", "SS 재고", "리오더 알림"];
   const values: (string | number)[][] = [header];
   for (let i = 0; i < sixRows.length; i++) {
     const r = sixRows[i];
@@ -265,26 +265,24 @@ async function main(): Promise<void> {
       r.category,
       r.productName,
       r.optionText,
-      r.sku,
       sixSale,
       ssSale,
       sixStock,
       ssStock,
-      // 리오더는 합 기준 (식스샵 + SS 둘 다 합쳤을 때 임박이면 발주 의사결정용)
-      `=IF(G${rowR}+H${rowR}<=20, "⚠ 리오더", IF(G${rowR}+H${rowR}<=50, "⚡ 임박", ""))`,
+      // 리오더는 합 기준 (식스샵+SS 재고 합)
+      `=IF(F${rowR}+G${rowR}<=20, "⚠ 리오더", IF(F${rowR}+G${rowR}<=50, "⚡ 임박", ""))`,
     ]);
   }
 
-  // unmatched 행 추가 (사장님 검증용)
+  // unmatched 행 추가 (사장님 검증용) — 8-col
   if (salesUnmatchedSum > 0 || stockUnmatchedSum > 0) {
-    values.push(["", "", "", "", "", "", "", "", ""]);
-    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "", "SS 결제완료(매칭X)", "", "SS 재고(매칭X)", ""]);
+    values.push(["", "", "", "", "", "", "", ""]);
+    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "SS 결제완료(매칭X)", "", "SS 재고(매칭X)", ""]);
     const allSsIds = new Set([...salesAttr.unmatchedByProduct.keys(), ...stockAttr.unmatchedByProduct.keys()]);
     for (const ssId of allSsIds) {
       values.push([
         "",
         ssId,
-        "",
         "",
         "",
         salesAttr.unmatchedByProduct.get(ssId) ?? 0,

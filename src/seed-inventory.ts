@@ -330,12 +330,12 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], pendingByKey: 
     range: `${brand.stockSheetName}!A:Z`,
   });
 
-  // 단일 채널(6A/CT) 7열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
-  // 결제완료 = 식스샵 어드민 "결제완료(발송대기)" 탭 라이브 카운트. 운송장 출력하면 빠짐.
+  // 단일 채널(6A/CT) 6열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
+  // 실시간 결제완료 = 식스샵 어드민 "결제완료(발송대기)" 탭 라이브 카운트. 운송장 출력하면 빠짐.
   // 갱신 시각은 헤더가 아닌 J1 "최신화: ..."에 표시.
   const header = [
-    "카테고리", "상품명", "옵션", "SKU",
-    "결제완료",
+    "카테고리", "상품명", "옵션",
+    "실시간 결제완료",
     "남은재고",
     "리오더 알림",
   ];
@@ -349,10 +349,9 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], pendingByKey: 
       p.category,
       p.productName,
       p.optionText,
-      p.sku,
       sold,
       remaining,
-      `=IF(F${r}<=5, "⚠ 리오더", IF(F${r}<=10, "⚡ 임박", ""))`,
+      `=IF(E${r}<=5, "⚠ 리오더", IF(E${r}<=10, "⚡ 임박", ""))`,
     ]);
   });
   await sheets.spreadsheets.values.update({
