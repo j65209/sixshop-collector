@@ -12,9 +12,9 @@
 import "dotenv/config";
 import { google } from "googleapis";
 import { config } from "./config.js";
-import { BRANDS } from "./brands.js";
-import { fetchSmartStoreProductStocks } from "./smartstore.js";
-import { getBrandState, setBrandState } from "./sheets.js";
+import { BRANDS, type Brand } from "./brands.js";
+import { fetchSmartStoreOrders, fetchSmartStoreProductStocks } from "./smartstore.js";
+import { setBrandState } from "./sheets.js";
 
 const FINAL_SHEET = "PP 재고마스터"; // 사장님이 보는 dashboard
 const RAW_FINAL = "PP 식스샵 재고마스터"; // GHA가 박는 식스샵 옵션별 raw
@@ -31,13 +31,6 @@ function getSheetsClient() {
 
 function nowKstStamp(): string {
   const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
-}
-
-/** "어제 SS 판매" 컬럼용 24h 윈도우 시작 (KST "YYYY-MM-DD HH:mm:ss"). */
-function windowStartKstString(): string {
-  const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
   return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
@@ -115,34 +108,30 @@ async function readMapping(): Promise<Map<string, string>> {
   return map;
 }
 
-/** SS주문로그 → originProductNo별 옵션 라인들 (windowStart 이후 = 최근 24h) */
+/**
+ * SS API에서 라이브 fetch — 현재 PAYED(결제완료=발송대기) 상태인 주문만.
+ * 발송 처리되면 status가 DELIVERING으로 바뀌어 PAYED에서 빠지므로 자연 차감.
+ * 윈도우는 status 변경이 잡히는 범위 (last 14d). PAYED 상태가 14일 이상 묵을 가능성은 거의 없음.
+ */
 interface SsLine { tokens: Set<string>; qty: number; }
-async function readSsLines(ssOrdersSheet: string, windowStart: string): Promise<Map<string, SsLine[]>> {
+async function fetchPendingSsByProduct(brand: Brand): Promise<Map<string, SsLine[]>> {
+  const to = new Date();
+  const from = new Date(to.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const orders = await fetchSmartStoreOrders(brand, from, to);
+
   const map = new Map<string, SsLine[]>();
-  const sheets = getSheetsClient();
-  const got = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.sheets.sheetId,
-    range: `${ssOrdersSheet}!C2:K`,
-  });
-  // C=주문일시(0), D=상태(1), E=상품명(2), F=옵션(3), G=SKU(4), H=수량(5), I=결제금액(6), J=수집일시(7), K=SS상품번호(8)
-  let inWindow = 0, outOfWindow = 0;
-  for (const row of got.data.values ?? []) {
-    const orderedAt = String(row[0] ?? "");
-    if (!orderedAt || orderedAt < windowStart) { outOfWindow++; continue; }
-    const status = String(row[1] ?? "").trim();
-    // 비-판매 상태 제외 (취소/반품/미결제취소/교환). vm-pp-cycle 며칠 안 돌리면 그 사이 취소된 주문이 어제 판매로 잡힐 위험 차단.
-    if (status === "CANCELED" || status === "RETURNED" || status === "CANCELED_BY_NOPAYMENT" || status === "EXCHANGED") {
-      continue;
-    }
-    const opt = String(row[3] ?? "");
-    const qty = Number(row[5]) || 0;
-    const ssId = String(row[8] ?? "").trim();
-    if (!ssId || qty === 0) continue;
-    if (!map.has(ssId)) map.set(ssId, []);
-    map.get(ssId)!.push({ tokens: tokenizeOption(opt), qty });
-    inWindow++;
+  let payedCount = 0;
+  const statusTally = new Map<string, number>();
+  for (const o of orders) {
+    statusTally.set(o.status, (statusTally.get(o.status) ?? 0) + 1);
+    if (o.status !== "PAYED") continue;
+    if (!o.originProductNo || o.quantity === 0) continue;
+    if (!map.has(o.originProductNo)) map.set(o.originProductNo, []);
+    map.get(o.originProductNo)!.push({ tokens: tokenizeOption(o.optionText), qty: o.quantity });
+    payedCount++;
   }
-  console.log(`  [SS window ${windowStart}~now] ${inWindow} lines in, ${outOfWindow} older`);
+  console.log(`  [SS pending fetch last 14d] PAYED=${payedCount} / 전체 ${orders.length}`);
+  console.log(`  [SS status tally] ${[...statusTally.entries()].map(([k, v]) => `${k}=${v}`).join(", ")}`);
   return map;
 }
 
@@ -201,14 +190,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 24h 고정 윈도우 — "어제 SS 판매" 컬럼 의미와 일치.
-  // 이전엔 last_pp_master_at(직전 dashboard refresh 시각)을 cutoff로 썼는데,
-  // 같은 날 cron이 여러 번 돌면 cutoff가 최신 시각으로 advance되어 SS 판매가 0으로 나오는 버그가 있었음.
-  const windowStart = windowStartKstString();
-  const lastRunAt = await getBrandState(ppBrand, "last_pp_master_at").catch(() => null);
-  console.log(`[refresh-pp-master] last_pp_master_at = ${lastRunAt ?? "(first run)"}, window: ${windowStart}~now (24h)`);
-
-  // 1) 식스샵 raw 시트 읽기 (GHA가 박음)
+  // 1) 식스샵 raw 시트 읽기 (GHA가 박음 — 결제완료 라이브 카운트가 yesterdaySales 자리에 들어있음)
   const sixRows = await readRawSheet(RAW_FINAL);
   console.log(`[refresh-pp-master] 식스샵 raw rows: ${sixRows.length}`);
   if (sixRows.length === 0) {
@@ -236,13 +218,13 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`[refresh-pp-master] reading SS sales (window=${windowStart}~now)...`);
-  const ssSalesLines = await readSsLines(ppBrand.smartStore.ssOrdersSheetName, windowStart);
+  console.log(`[refresh-pp-master] fetching SS pending orders (PAYED status, last 14d)...`);
+  const ssPendingLines = await fetchPendingSsByProduct(ppBrand);
   const ssSalesData = new Map<string, Array<{ tokens: Set<string>; value: number }>>();
-  for (const [ssId, lines] of ssSalesLines) {
+  for (const [ssId, lines] of ssPendingLines) {
     ssSalesData.set(ssId, lines.map((l) => ({ tokens: l.tokens, value: l.qty })));
   }
-  console.log(`[refresh-pp-master] SS sales lines: ${[...ssSalesLines.values()].reduce((a, b) => a + b.length, 0)}`);
+  console.log(`[refresh-pp-master] SS pending lines: ${[...ssPendingLines.values()].reduce((a, b) => a + b.length, 0)}`);
 
   // 3) attribute (옵션 매칭)
   const stockAttr = attribute(sixRows, mapping, ssStockData);
@@ -251,7 +233,7 @@ async function main(): Promise<void> {
   let stockUnmatchedSum = [...stockAttr.unmatchedByProduct.values()].reduce((a, b) => a + b, 0);
   let salesUnmatchedSum = [...salesAttr.unmatchedByProduct.values()].reduce((a, b) => a + b, 0);
   console.log(`[refresh-pp-master] SS 재고 attributed: ${[...stockAttr.attributedByRowIdx.values()].reduce((a, b) => a + b, 0).toFixed(0)} (unmatched: ${stockUnmatchedSum.toFixed(0)})`);
-  console.log(`[refresh-pp-master] SS 판매 attributed: ${[...salesAttr.attributedByRowIdx.values()].reduce((a, b) => a + b, 0).toFixed(0)} (unmatched: ${salesUnmatchedSum.toFixed(0)})`);
+  console.log(`[refresh-pp-master] SS 결제완료 attributed: ${[...salesAttr.attributedByRowIdx.values()].reduce((a, b) => a + b, 0).toFixed(0)} (unmatched: ${salesUnmatchedSum.toFixed(0)})`);
 
   // 4) PP 재고마스터 dashboard 작성
   const sheets = getSheetsClient();
@@ -268,8 +250,8 @@ async function main(): Promise<void> {
   }
   const sheetId = sheetMeta?.properties?.sheetId;
 
-  // 9-col 옵션 단위 schema — 식스샵/SS 분리 (합산 X). setup-pp-mapping의 SUMIF 수식과도 정렬됨.
-  const header = ["카테고리", "상품명", "옵션", "SKU", "어제 식스샵 판매", "어제 SS 판매", "식스샵 재고", "SS 재고", "리오더 알림"];
+  // 9-col 옵션 단위 schema — 식스샵/SS 분리 (합산 X). 결제완료 = 발송대기 (운송장 출력 전) 라이브 카운트.
+  const header = ["카테고리", "상품명", "옵션", "SKU", "식스샵 결제완료", "SS 결제완료", "식스샵 재고", "SS 재고", "리오더 알림"];
   const values: (string | number)[][] = [header];
   for (let i = 0; i < sixRows.length; i++) {
     const r = sixRows[i];
@@ -296,7 +278,7 @@ async function main(): Promise<void> {
   // unmatched 행 추가 (사장님 검증용)
   if (salesUnmatchedSum > 0 || stockUnmatchedSum > 0) {
     values.push(["", "", "", "", "", "", "", "", ""]);
-    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "", "어제 SS 판매(매칭X)", "", "SS 재고(매칭X)", ""]);
+    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "", "SS 결제완료(매칭X)", "", "SS 재고(매칭X)", ""]);
     const allSsIds = new Set([...salesAttr.unmatchedByProduct.keys(), ...stockAttr.unmatchedByProduct.keys()]);
     for (const ssId of allSsIds) {
       values.push([
