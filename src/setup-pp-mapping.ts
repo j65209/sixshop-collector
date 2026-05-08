@@ -82,18 +82,19 @@ async function main(): Promise<void> {
   for (const [sixName, ssId] of Object.entries(MAPPING)) {
     const ssCell = ssId == null ? "" : ssId;
     const note = ssId == null ? "SS 미판매" : "";
-    // D: 식스샵 총재고 — PP 재고마스터에서 상품명(B열)이 일치하는 행의 현재재고(E열) 합
-    // E: 식스샵 총판매 — PP 재고마스터 F열(식스샵 판매수량) 합
-    //   주의: 현재 PP 재고마스터는 SS 컬럼 추가로 9-col, 식스샵 판매는 F열에 위치
-    // F: SS 판매 — PP SS주문로그 K열(SS상품번호)이 B와 일치하는 행의 H열(수량) 합
+    // PP 재고마스터 새 9-col schema (옵션 단위, 식스샵/SS 분리):
+    //   A=카테고리 B=상품명 C=옵션 D=SKU E=어제 식스샵 판매 F=어제 SS 판매 G=식스샵 재고 H=SS 재고
+    // D: 식스샵 총재고 = SUMIF B:B상품명 → G:G(식스샵 재고)
+    // E: 식스샵 총판매 = SUMIF B:B상품명 → E:E(어제 식스샵 판매)
+    // F: SS 판매 (PP SS주문로그에서)
     // G: 남은재고 = D - E - F
-    // H: 리오더 알림 (남은재고 임계치)
+    // H: 리오더 알림
     values.push([
       sixName,
       ssCell,
       note,
+      `=IFERROR(SUMIF('PP 재고마스터'!B:B, A${r}, 'PP 재고마스터'!G:G), 0)`,
       `=IFERROR(SUMIF('PP 재고마스터'!B:B, A${r}, 'PP 재고마스터'!E:E), 0)`,
-      `=IFERROR(SUMIF('PP 재고마스터'!B:B, A${r}, 'PP 재고마스터'!F:F), 0)`,
       `=IF(B${r}="", 0, IFERROR(SUMIF('PP SS주문로그'!K:K, B${r}, 'PP SS주문로그'!H:H), 0))`,
       `=D${r}-E${r}-F${r}`,
       `=IF(G${r}<=20, "⚠ 리오더", IF(G${r}<=50, "⚡ 임박", ""))`,

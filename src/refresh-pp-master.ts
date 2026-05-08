@@ -255,34 +255,35 @@ async function main(): Promise<void> {
   }
   const sheetId = sheetMeta?.properties?.sheetId;
 
-  const header = ["카테고리", "상품명", "옵션", "SKU", "어제 판매", "남은재고", "리오더 알림"];
+  // 9-col 옵션 단위 schema — 식스샵/SS 분리 (합산 X). setup-pp-mapping의 SUMIF 수식과도 정렬됨.
+  const header = ["카테고리", "상품명", "옵션", "SKU", "어제 식스샵 판매", "어제 SS 판매", "식스샵 재고", "SS 재고", "리오더 알림"];
   const values: (string | number)[][] = [header];
   for (let i = 0; i < sixRows.length; i++) {
     const r = sixRows[i];
     const sixSale = r.yesterdaySales;
-    // 옵션 1:N 매칭 균등 분배의 결과는 소수가 나오므로 정수로 반올림 (시각적 단순화).
-    // 합계가 ±1 어긋날 수 있으나 채널별 옵션 분배 자체가 추정이라 허용.
+    // 옵션 1:N 매칭 균등 분배의 결과는 소수가 나오므로 정수로 반올림.
     const ssSale = Math.round(salesAttr.attributedByRowIdx.get(i) ?? 0);
     const sixStock = r.stock;
     const ssStock = Math.round(stockAttr.attributedByRowIdx.get(i) ?? 0);
-    const totalSale = sixSale + ssSale;
-    const totalStock = sixStock + ssStock;
     const rowR = i + 2;
     values.push([
       r.category,
       r.productName,
       r.optionText,
       r.sku,
-      totalSale,
-      totalStock,
-      `=IF(F${rowR}<=20, "⚠ 리오더", IF(F${rowR}<=50, "⚡ 임박", ""))`,
+      sixSale,
+      ssSale,
+      sixStock,
+      ssStock,
+      // 리오더는 합 기준 (식스샵 + SS 둘 다 합쳤을 때 임박이면 발주 의사결정용)
+      `=IF(G${rowR}+H${rowR}<=20, "⚠ 리오더", IF(G${rowR}+H${rowR}<=50, "⚡ 임박", ""))`,
     ]);
   }
 
   // unmatched 행 추가 (사장님 검증용)
   if (salesUnmatchedSum > 0 || stockUnmatchedSum > 0) {
-    values.push(["", "", "", "", "", "", ""]);
-    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "어제 SS 판매(매칭X)", "SS 재고(매칭X)", ""]);
+    values.push(["", "", "", "", "", "", "", "", ""]);
+    values.push(["⚠ 옵션 매칭 안 됨", "ssId", "", "", "", "어제 SS 판매(매칭X)", "", "SS 재고(매칭X)", ""]);
     const allSsIds = new Set([...salesAttr.unmatchedByProduct.keys(), ...stockAttr.unmatchedByProduct.keys()]);
     for (const ssId of allSsIds) {
       values.push([
@@ -290,7 +291,9 @@ async function main(): Promise<void> {
         ssId,
         "",
         "",
+        "",
         salesAttr.unmatchedByProduct.get(ssId) ?? 0,
+        "",
         stockAttr.unmatchedByProduct.get(ssId) ?? 0,
         "",
       ]);
@@ -306,7 +309,7 @@ async function main(): Promise<void> {
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${FINAL_SHEET}!I1`,
+    range: `${FINAL_SHEET}!K1`,
     valueInputOption: "RAW",
     requestBody: { values: [[`최신화: ${nowKstStamp()}`]] },
   });
