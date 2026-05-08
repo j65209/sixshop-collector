@@ -1,6 +1,6 @@
 import { fetchOrdersForBrand, loginAsBrand, newBrandPage, newBrowser } from "./sixshop.js";
-import { appendOrders, ensureBrandSchema, getBrandState, readExistingKeys, setBrandState } from "./sheets.js";
-import { refreshInventoryForBrand } from "./seed-inventory.js";
+import { appendOrders, ensureBrandSchema, readExistingKeys, setBrandState } from "./sheets.js";
+import { pendingByKeyFromOrders, refreshInventoryForBrand } from "./seed-inventory.js";
 import { rowKey, toRow } from "./types.js";
 import { type Brand, BRANDS } from "./brands.js";
 import type { OrderItem } from "./types.js";
@@ -27,16 +27,14 @@ async function main(): Promise<void> {
         brandErrors.push(`schema: ${(e as Error).message}`);
       });
 
-      // 어제 판매 계산용. 직전 cron 시각 ~ 지금 사이 식스샵 주문을 차감 윈도우로 사용.
-      const lastRunAt = await getBrandState(brand, "last_run_at").catch(() => null);
-
       const page = await newBrandPage(browser);
       try {
         await loginAsBrand(page, brand);
 
-        // 1) 주문 수집 (식스샵 다운로드는 가끔 timeout — 1회 재시도)
+        // 1) 주문 수집 (식스샵 어드민 "결제완료" 탭 다운로드 = 발송대기 주문)
+        // 다운로드는 가끔 timeout — 1회 재시도
+        let orders: OrderItem[] = [];
         try {
-          let orders;
           try {
             orders = await fetchOrdersForBrand(page, brand);
           } catch (err1) {
@@ -56,10 +54,12 @@ async function main(): Promise<void> {
 
         // 스마트스토어 sync는 IP 화이트리스트 때문에 GHA에서 못 돌림 — `npm run sync-ss`를 사용자 PC에서 실행
 
-        // 2) 재고 새로고침 (멀티채널 브랜드는 매핑 작업 전까지 보류 — 주문 수집은 그대로)
+        // 2) 재고 새로고침 — 결제완료(발송대기) 카운트는 위에서 fresh fetch한 orders 그대로 합산
+        // (운송장 출력하면 식스샵 어드민의 "결제완료" 탭에서 빠지므로 다음 cron엔 자연 차감)
         if (brand.inventoryEnabled) {
           try {
-            await refreshInventoryForBrand(page, brand, lastRunAt);
+            const pendingByKey = pendingByKeyFromOrders(orders);
+            await refreshInventoryForBrand(page, brand, pendingByKey);
           } catch (err) {
             console.error(`[${brand.displayName}] inventory failed:`, (err as Error).message);
             brandErrors.push(`inv: ${(err as Error).message}`.slice(0, 80));

@@ -17,25 +17,6 @@ interface ProductRow {
   category: string;
 }
 
-function todayKstDateTag(): string {
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  return `${kst.getUTCMonth() + 1}.${kst.getUTCDate()}완료`;
-}
-
-/** "5.5~5.6" KST: 24h 윈도우 라벨 (어제 ~ 오늘) */
-function windowDateTag(): string {
-  const end = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-  return `${start.getUTCMonth() + 1}.${start.getUTCDate()}~${end.getUTCMonth() + 1}.${end.getUTCDate()}`;
-}
-
-/** "YYYY-MM-DD HH:mm:ss" KST string for (now - 24h). 주문로그/SS주문로그 datetime 컬럼과 비교용 (sortable string) */
-function windowStartKstString(): string {
-  const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
-}
-
 function nowKstStamp(): string {
   const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const m = String(kst.getUTCMonth() + 1).padStart(2, "0");
@@ -177,30 +158,19 @@ function getSheetsClient() {
 }
 
 /**
- * 주문로그에서 (last_run_at, now] 사이의 (상품명, 옵션)별 판매수량 합계.
- * 옵션 비교는 trim해서 좌우 공백 차이 흡수.
- * lastRunAt이 null이면 빈 Map (첫 회 실행 — 차감 없이 시드만).
+ * fetchOrdersForBrand가 리턴한 결제완료 주문(라이브 발송대기 목록)을
+ * (상품명, 옵션) 키로 합산. 운송장 출력되면 식스샵 어드민의 "결제완료" 탭에서 빠지므로
+ * 다음 cron의 fetch엔 안 들어옴 = 자연스럽게 차감.
  */
-async function computeSalesByKey(
-  brand: Brand,
-  lastRunAt: string | null,
-): Promise<Map<string, number>> {
+export function pendingByKeyFromOrders(orders: { productName: string; optionText: string; quantity: number; status: string }[]): Map<string, number> {
   const result = new Map<string, number>();
-  if (!lastRunAt) return result;
-
-  const sheets = getSheetsClient();
-  const got = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.sheets.sheetId,
-    range: `${brand.ordersSheetName}!A2:G`,
-  });
-  for (const row of got.data.values ?? []) {
-    const orderedAt = String(row[1] ?? "");
-    if (!orderedAt || orderedAt <= lastRunAt) continue;
-    const status = String(row[2] ?? "").trim();
-    if (status !== "결제 완료") continue; // 취소/환불 제외, 결제완료만 판매로 카운트
-    const name = String(row[3] ?? "").trim();
-    const opt = String(row[4] ?? "").trim();
-    const qty = Number(row[6]) || 0;
+  for (const o of orders) {
+    // applyPaidFilter로 결제완료 탭 다운로드지만 안전하게 status 재확인
+    const s = (o.status ?? "").trim();
+    if (s !== "결제 완료" && s !== "결제완료") continue;
+    const name = (o.productName ?? "").trim();
+    const opt = (o.optionText ?? "").trim();
+    const qty = Number(o.quantity) || 0;
     if (!name || !qty) continue;
     const key = `${name}::${opt}`;
     result.set(key, (result.get(key) ?? 0) + qty);
@@ -339,7 +309,7 @@ function attributeSsSalesToRows(
   return result;
 }
 
-async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Map<string, number>): Promise<void> {
+async function pushToStockSheet(brand: Brand, rows: ProductRow[], pendingByKey: Map<string, number>): Promise<void> {
   const sheets = getSheetsClient();
   const spreadsheetId = config.sheets.sheetId;
 
@@ -360,12 +330,12 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
     range: `${brand.stockSheetName}!A:Z`,
   });
 
-  // 단일 채널(6A/CT) 7열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
-  // 어제 판매는 lastRunAt~now 사이 결제완료 주문을 코드에서 직접 합산한 값.
+  // 단일 채널(6A/CT) 6열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
+  // 실시간 결제완료 = 식스샵 어드민 "결제완료(발송대기)" 탭 라이브 카운트. 운송장 출력하면 빠짐.
   // 갱신 시각은 헤더가 아닌 J1 "최신화: ..."에 표시.
   const header = [
-    "카테고리", "상품명", "옵션", "SKU",
-    "어제 판매",
+    "카테고리", "상품명", "옵션",
+    "실시간 결제완료",
     "남은재고",
     "리오더 알림",
   ];
@@ -373,16 +343,15 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
   const values: (string | number)[][] = [header];
   rows.forEach((p) => {
     const r = values.length + 1;
-    const sold = salesByKey.get(`${p.productName}::${p.optionText}`) ?? 0;
+    const sold = pendingByKey.get(`${p.productName}::${p.optionText}`) ?? 0;
     const remaining = p.stock; // mall API 또는 CSV의 현재 재고 = 단일 채널의 진짜 남은재고
     values.push([
       p.category,
       p.productName,
       p.optionText,
-      p.sku,
       sold,
       remaining,
-      `=IF(F${r}<=5, "⚠ 리오더", IF(F${r}<=10, "⚡ 임박", ""))`,
+      `=IF(E${r}<=5, "⚠ 리오더", IF(E${r}<=10, "⚡ 임박", ""))`,
     ]);
   });
   await sheets.spreadsheets.values.update({
@@ -427,7 +396,7 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
 export async function refreshInventoryForBrand(
   page: Page,
   brand: Brand,
-  lastRunAt: string | null,
+  pendingByKey: Map<string, number>,
 ): Promise<{ total: number }> {
   const path = await downloadProductsCsv(page);
   try {
@@ -470,20 +439,19 @@ export async function refreshInventoryForBrand(
 
     final.sort((a, b) => b.stock - a.stock);
 
-    const salesByKey = await computeSalesByKey(brand, lastRunAt);
-    await pushToStockSheet(brand, final, salesByKey);
+    await pushToStockSheet(brand, final, pendingByKey);
     const apiCount = [...optionStocksByProduct.values()].reduce((a, m) => a + m.size, 0);
-    const soldTotal = [...salesByKey.values()].reduce((a, n) => a + n, 0);
-    console.log(`[${brand.displayName}] inventory refreshed: rows=${final.length}, 옵션재고 from API=${apiCount}, 어제판매합=${soldTotal} (since ${lastRunAt ?? "first-run"})`);
+    const pendingTotal = [...pendingByKey.values()].reduce((a, n) => a + n, 0);
+    console.log(`[${brand.displayName}] inventory refreshed: rows=${final.length}, 옵션재고 from API=${apiCount}, 결제완료(발송대기)=${pendingTotal}`);
     return { total: final.length };
   } finally {
     await unlink(path).catch(() => {});
   }
 }
 
-// 수동 실행: `npm run seed-inventory`
+// 수동 실행: `npm run seed-inventory` — 결제완료 fetch + 재고 갱신
 async function main(): Promise<void> {
-  const { getBrandState } = await import("./sheets.js");
+  const { fetchOrdersForBrand } = await import("./sixshop.js");
   const browser = await newBrowser();
   try {
     for (const brand of BRANDS) {
@@ -491,11 +459,12 @@ async function main(): Promise<void> {
         console.log(`[${brand.displayName}] skipped (inventoryEnabled=false)`);
         continue;
       }
-      const lastRunAt = await getBrandState(brand, "last_run_at").catch(() => null);
       const page = await newBrandPage(browser);
       try {
         await loginAsBrand(page, brand);
-        await refreshInventoryForBrand(page, brand, lastRunAt);
+        const orders = await fetchOrdersForBrand(page, brand);
+        const pendingByKey = pendingByKeyFromOrders(orders);
+        await refreshInventoryForBrand(page, brand, pendingByKey);
       } finally {
         await page.context().close();
       }
