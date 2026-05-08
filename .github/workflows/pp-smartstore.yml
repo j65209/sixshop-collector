@@ -1,0 +1,44 @@
+name: pp-smartstore-sync
+
+# PP 스마트스토어 동기화 + PP 재고마스터 dashboard 갱신.
+# NAVER Commerce API가 IP 화이트리스트 기반이라 ubuntu-latest runner에서 직접 호출 불가.
+# 대신 ubuntu runner → SSH로 GCP VM(34.122.125.68, 화이트리스트됨)에 접속해서 vm-pp-cycle 실행.
+#
+# 트리거:
+# 1. collect-sixshop-orders 성공 후 자동 chain (workflow_run) — Brightbeed Office "ERP 최신화" 버튼 또는 정기 cron
+# 2. workflow_dispatch — 수동
+on:
+  workflow_run:
+    workflows: ["collect-sixshop-orders"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pp-smartstore
+  cancel-in-progress: false
+
+jobs:
+  pp-smartstore:
+    # collect 성공 후에만 (workflow_run의 conclusion 체크) — 수동 dispatch는 항상 진행
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout (for src sync to VM)
+        uses: actions/checkout@v4
+
+      - name: Setup SSH known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 34.122.125.68 >> ~/.ssh/known_hosts 2>/dev/null
+          echo "${{ secrets.GCP_VM_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Sync latest src/ to GCP VM
+        run: |
+          rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" src/ macbook@34.122.125.68:~/sixshop-collector/src/
+
+      - name: Run vm-pp-cycle on GCP VM
+        run: |
+          ssh -o StrictHostKeyChecking=no macbook@34.122.125.68 'cd ~/sixshop-collector && npm run vm-pp-cycle'
