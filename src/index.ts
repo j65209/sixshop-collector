@@ -31,20 +31,13 @@ async function main(): Promise<void> {
       try {
         await loginAsBrand(page, brand);
 
-        // 1) 주문 수집 (식스샵 어드민 "결제완료" 탭 다운로드 = 발송대기 주문)
-        // 다운로드는 가끔 timeout — 1회 재시도
+        // 1) 주문 수집 — fetchOrdersForBrand 내부에 5회 retry + exponential backoff 내장
         let orders: OrderItem[] = [];
         try {
-          try {
-            orders = await fetchOrdersForBrand(page, brand);
-          } catch (err1) {
-            console.warn(`[${brand.displayName}] orders attempt 1 failed: ${(err1 as Error).message} — retry in 10s`);
-            await page.waitForTimeout(10_000);
-            orders = await fetchOrdersForBrand(page, brand);
-          }
+          orders = await fetchOrdersForBrand(page, brand);
           newRowsCount = await appendNewOrders(brand, orders, startedAt);
         } catch (err) {
-          console.error(`[${brand.displayName}] orders failed (after retry):`, (err as Error).message);
+          console.error(`[${brand.displayName}] orders failed:`, (err as Error).message);
           brandErrors.push(`orders: ${(err as Error).message}`.slice(0, 80));
         }
 

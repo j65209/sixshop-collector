@@ -205,6 +205,15 @@ async function main(): Promise<void> {
   console.log(`[refresh-pp-master] fetching SS option stocks...`);
   const ssProductStocks = await fetchSmartStoreProductStocks(ppBrand);
   console.log(`[refresh-pp-master] SS products fetched: ${ssProductStocks.size}`);
+  // Health check: SS API silent-fail 패턴 감지 (IP 화이트리스트 빠지면 200 + 빈 응답)
+  // 정상 상태에선 28~30개 상품 ≈. 5개 미만이면 비정상 → 빠르게 명확한 에러로 fail (silent stale data 방지)
+  if (ssProductStocks.size < 5) {
+    throw new Error(
+      `SS API health check FAIL: products fetched=${ssProductStocks.size} (정상 28+). ` +
+      `IP 화이트리스트 빠졌거나 NAVER credential 만료 가능. ` +
+      `진단: 현재 외부 IP (curl ifconfig.me) 확인 + NAVER 커머스 API IP 등록 확인.`
+    );
+  }
 
   // SS 재고를 attribute용 형식으로 변환
   const ssStockData = new Map<string, Array<{ tokens: Set<string>; value: number }>>();
