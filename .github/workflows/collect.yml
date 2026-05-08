@@ -7,6 +7,14 @@ on:
     # 아래 schedule은 외부 cron 실패 시 fallback (한 번이라도 돌면 OK).
     - cron: "0 23 * * *"  # UTC 23:00 = KST 08:00 (정시)
     - cron: "0 1 * * *"   # UTC 01:00 = KST 10:00 (fallback)
+  # main에 src/ 또는 workflow 변경 push되면 자동 트리거 — PR 머지 후 "수동 트리거" step 제거
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/collect.yml"
   workflow_dispatch:
 
 concurrency:

@@ -30,33 +30,72 @@ export async function newBrandPage(browser: Browser): Promise<Page> {
 
 export async function loginAsBrand(page: Page, brand: Brand): Promise<void> {
   const { email, password } = brandCredentials(brand);
-  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-  const formData = new URLSearchParams({
-    idOrUserName: Buffer.from(email).toString("base64"),
-    password: Buffer.from(password).toString("base64"),
-    keepLoginAgreement: "on",
-    trendReportLogin: "", memberNo: "0", pageNo: "0", shopCustomerNo: "0",
-  }).toString();
-  const res = await page.evaluate(async (body) => {
-    const r = await fetch("/member/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body, credentials: "include",
-    });
-    return { status: r.status, ok: (await r.text()).includes('"RESULT":"OK"') };
-  }, formData);
-  if (!res.ok) throw new Error(`login failed for ${brand.displayName}: ${res.status}`);
+  // 로그인도 가끔 fail (네트워크/세션 충돌) → 3회 retry
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const formData = new URLSearchParams({
+        idOrUserName: Buffer.from(email).toString("base64"),
+        password: Buffer.from(password).toString("base64"),
+        keepLoginAgreement: "on",
+        trendReportLogin: "", memberNo: "0", pageNo: "0", shopCustomerNo: "0",
+      }).toString();
+      const res = await page.evaluate(async (body) => {
+        const r = await fetch("/member/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body, credentials: "include",
+        });
+        return { status: r.status, ok: (await r.text()).includes('"RESULT":"OK"') };
+      }, formData);
+      if (res.ok) {
+        if (attempt > 1) console.log(`[${brand.displayName}] login OK on attempt ${attempt}`);
+        return;
+      }
+      throw new Error(`login API status=${res.status}`);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (attempt === maxAttempts) {
+        throw new Error(`[${brand.displayName}] login failed after ${maxAttempts} attempts: ${msg}`);
+      }
+      const wait = 5_000 * attempt;
+      console.warn(`[${brand.displayName}] login attempt ${attempt}/${maxAttempts} failed: ${msg} — retry in ${wait/1000}s`);
+      await page.waitForTimeout(wait);
+    }
+  }
 }
 
 export async function fetchOrdersForBrand(page: Page, brand: Brand): Promise<OrderItem[]> {
-  await page.goto(ORDERS_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.waitForTimeout(2500);
-  await applyPaidFilter(page);
+  // 식스샵 다운로드는 다이얼로그 timing/세션 등 이유로 자주 flaky → 5회 retry + exponential backoff
+  // 매 retry마다 page를 fresh state로 reset (orders URL 재방문)
+  const maxAttempts = 5;
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await page.goto(ORDERS_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await page.waitForTimeout(2500);
+      await applyPaidFilter(page);
 
-  const xlsxPath = await downloadOrdersXlsx(page, brand);
-  const orders = parseXlsx(xlsxPath);
-  await unlink(xlsxPath).catch(() => {});
-  return orders;
+      const xlsxPath = await downloadOrdersXlsx(page, brand);
+      const orders = parseXlsx(xlsxPath);
+      await unlink(xlsxPath).catch(() => {});
+      if (attempt > 1) console.log(`[${brand.displayName}] orders fetched on attempt ${attempt}`);
+      return orders;
+    } catch (err) {
+      lastErr = err as Error;
+      const wait = Math.min(10_000 * Math.pow(2, attempt - 1), 120_000); // 10s, 20s, 40s, 80s, 120s
+      if (attempt < maxAttempts) {
+        console.warn(`[${brand.displayName}] orders attempt ${attempt}/${maxAttempts} failed: ${lastErr.message.slice(0, 100)} — retry in ${wait/1000}s`);
+        // 다이얼로그/팝업 잔존 제거 + 페이지 정리
+        await page.evaluate(() => {
+          document.querySelectorAll(".dialog--open").forEach((d) => (d as HTMLElement).style.display = "none");
+        }).catch(() => {});
+        await page.waitForTimeout(wait);
+      }
+    }
+  }
+  throw new Error(`[${brand.displayName}] orders failed after ${maxAttempts} attempts: ${lastErr?.message ?? "unknown"}`);
 }
 
 export async function downloadProductsCsv(page: Page): Promise<string> {
