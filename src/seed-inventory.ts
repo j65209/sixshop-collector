@@ -177,16 +177,14 @@ function getSheetsClient() {
 }
 
 /**
- * 주문로그에서 (last_run_at, now] 사이의 (상품명, 옵션)별 판매수량 합계.
- * 옵션 비교는 trim해서 좌우 공백 차이 흡수.
- * lastRunAt이 null이면 빈 Map (첫 회 실행 — 차감 없이 시드만).
+ * 주문로그에서 (now-24h, now] 사이의 (상품명, 옵션)별 판매수량 합계.
+ * "어제 판매" 컬럼 의미와 일치하는 고정 24h 윈도우.
+ * 이전엔 last_run_at(직전 cron 시각)을 cutoff로 썼는데, 같은 날 cron이 여러 번 돌면
+ * cutoff가 최신 시각으로 advance되어 그 사이 판매가 0건으로 나오는 버그가 있었음.
  */
-async function computeSalesByKey(
-  brand: Brand,
-  lastRunAt: string | null,
-): Promise<Map<string, number>> {
+async function computeSalesByKey(brand: Brand): Promise<Map<string, number>> {
   const result = new Map<string, number>();
-  if (!lastRunAt) return result;
+  const windowStart = windowStartKstString();
 
   const sheets = getSheetsClient();
   const got = await sheets.spreadsheets.values.get({
@@ -195,7 +193,7 @@ async function computeSalesByKey(
   });
   for (const row of got.data.values ?? []) {
     const orderedAt = String(row[1] ?? "");
-    if (!orderedAt || orderedAt <= lastRunAt) continue;
+    if (!orderedAt || orderedAt < windowStart) continue;
     const status = String(row[2] ?? "").trim();
     if (status !== "결제 완료") continue; // 취소/환불 제외, 결제완료만 판매로 카운트
     const name = String(row[3] ?? "").trim();
@@ -361,7 +359,7 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
   });
 
   // 단일 채널(6A/CT) 7열 구조. 남은재고 = mall API 실재고 (그날 8시 시점).
-  // 어제 판매는 lastRunAt~now 사이 결제완료 주문을 코드에서 직접 합산한 값.
+  // 어제 판매는 (now-24h)~now 사이 결제완료 주문을 코드에서 직접 합산한 값.
   // 갱신 시각은 헤더가 아닌 J1 "최신화: ..."에 표시.
   const header = [
     "카테고리", "상품명", "옵션", "SKU",
@@ -427,7 +425,6 @@ async function pushToStockSheet(brand: Brand, rows: ProductRow[], salesByKey: Ma
 export async function refreshInventoryForBrand(
   page: Page,
   brand: Brand,
-  lastRunAt: string | null,
 ): Promise<{ total: number }> {
   const path = await downloadProductsCsv(page);
   try {
@@ -470,11 +467,11 @@ export async function refreshInventoryForBrand(
 
     final.sort((a, b) => b.stock - a.stock);
 
-    const salesByKey = await computeSalesByKey(brand, lastRunAt);
+    const salesByKey = await computeSalesByKey(brand);
     await pushToStockSheet(brand, final, salesByKey);
     const apiCount = [...optionStocksByProduct.values()].reduce((a, m) => a + m.size, 0);
     const soldTotal = [...salesByKey.values()].reduce((a, n) => a + n, 0);
-    console.log(`[${brand.displayName}] inventory refreshed: rows=${final.length}, 옵션재고 from API=${apiCount}, 어제판매합=${soldTotal} (since ${lastRunAt ?? "first-run"})`);
+    console.log(`[${brand.displayName}] inventory refreshed: rows=${final.length}, 옵션재고 from API=${apiCount}, 어제판매합=${soldTotal} (window: 24h)`);
     return { total: final.length };
   } finally {
     await unlink(path).catch(() => {});
@@ -483,7 +480,6 @@ export async function refreshInventoryForBrand(
 
 // 수동 실행: `npm run seed-inventory`
 async function main(): Promise<void> {
-  const { getBrandState } = await import("./sheets.js");
   const browser = await newBrowser();
   try {
     for (const brand of BRANDS) {
@@ -491,11 +487,10 @@ async function main(): Promise<void> {
         console.log(`[${brand.displayName}] skipped (inventoryEnabled=false)`);
         continue;
       }
-      const lastRunAt = await getBrandState(brand, "last_run_at").catch(() => null);
       const page = await newBrandPage(browser);
       try {
         await loginAsBrand(page, brand);
-        await refreshInventoryForBrand(page, brand, lastRunAt);
+        await refreshInventoryForBrand(page, brand);
       } finally {
         await page.context().close();
       }

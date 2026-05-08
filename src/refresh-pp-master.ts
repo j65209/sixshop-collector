@@ -34,6 +34,13 @@ function nowKstStamp(): string {
   return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
+/** "어제 SS 판매" 컬럼용 24h 윈도우 시작 (KST "YYYY-MM-DD HH:mm:ss"). */
+function windowStartKstString(): string {
+  const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+}
+
 /** 식스샵/SS 공통 옵션 → 토큰 set. 그룹명/순서/구분자 차이 흡수. */
 function tokenizeOption(opt: string): Set<string> {
   if (!opt) return new Set();
@@ -108,20 +115,20 @@ async function readMapping(): Promise<Map<string, string>> {
   return map;
 }
 
-/** SS주문로그 → originProductNo별 옵션 라인들 (lastRunAt 이후) */
+/** SS주문로그 → originProductNo별 옵션 라인들 (windowStart 이후 = 최근 24h) */
 interface SsLine { tokens: Set<string>; qty: number; }
-async function readSsLines(ssOrdersSheet: string, lastRunAt: string | null): Promise<Map<string, SsLine[]>> {
+async function readSsLines(ssOrdersSheet: string, windowStart: string): Promise<Map<string, SsLine[]>> {
   const map = new Map<string, SsLine[]>();
-  if (!lastRunAt) return map;
   const sheets = getSheetsClient();
   const got = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheets.sheetId,
     range: `${ssOrdersSheet}!C2:K`,
   });
   // C=주문일시(0), D=상태(1), E=상품명(2), F=옵션(3), G=SKU(4), H=수량(5), I=결제금액(6), J=수집일시(7), K=SS상품번호(8)
+  let inWindow = 0, outOfWindow = 0;
   for (const row of got.data.values ?? []) {
     const orderedAt = String(row[0] ?? "");
-    if (!orderedAt || orderedAt <= lastRunAt) continue;
+    if (!orderedAt || orderedAt < windowStart) { outOfWindow++; continue; }
     const status = String(row[1] ?? "").trim();
     // 비-판매 상태 제외 (취소/반품/미결제취소/교환). vm-pp-cycle 며칠 안 돌리면 그 사이 취소된 주문이 어제 판매로 잡힐 위험 차단.
     if (status === "CANCELED" || status === "RETURNED" || status === "CANCELED_BY_NOPAYMENT" || status === "EXCHANGED") {
@@ -133,7 +140,9 @@ async function readSsLines(ssOrdersSheet: string, lastRunAt: string | null): Pro
     if (!ssId || qty === 0) continue;
     if (!map.has(ssId)) map.set(ssId, []);
     map.get(ssId)!.push({ tokens: tokenizeOption(opt), qty });
+    inWindow++;
   }
+  console.log(`  [SS window ${windowStart}~now] ${inWindow} lines in, ${outOfWindow} older`);
   return map;
 }
 
@@ -192,8 +201,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // 24h 고정 윈도우 — "어제 SS 판매" 컬럼 의미와 일치.
+  // 이전엔 last_pp_master_at(직전 dashboard refresh 시각)을 cutoff로 썼는데,
+  // 같은 날 cron이 여러 번 돌면 cutoff가 최신 시각으로 advance되어 SS 판매가 0으로 나오는 버그가 있었음.
+  const windowStart = windowStartKstString();
   const lastRunAt = await getBrandState(ppBrand, "last_pp_master_at").catch(() => null);
-  console.log(`[refresh-pp-master] last_pp_master_at = ${lastRunAt ?? "(first run)"}`);
+  console.log(`[refresh-pp-master] last_pp_master_at = ${lastRunAt ?? "(first run)"}, window: ${windowStart}~now (24h)`);
 
   // 1) 식스샵 raw 시트 읽기 (GHA가 박음)
   const sixRows = await readRawSheet(RAW_FINAL);
@@ -223,8 +236,8 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`[refresh-pp-master] reading SS sales (lastRunAt=${lastRunAt})...`);
-  const ssSalesLines = await readSsLines(ppBrand.smartStore.ssOrdersSheetName, lastRunAt);
+  console.log(`[refresh-pp-master] reading SS sales (window=${windowStart}~now)...`);
+  const ssSalesLines = await readSsLines(ppBrand.smartStore.ssOrdersSheetName, windowStart);
   const ssSalesData = new Map<string, Array<{ tokens: Set<string>; value: number }>>();
   for (const [ssId, lines] of ssSalesLines) {
     ssSalesData.set(ssId, lines.map((l) => ({ tokens: l.tokens, value: l.qty })));
