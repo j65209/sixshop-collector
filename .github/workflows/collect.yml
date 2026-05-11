@@ -2,11 +2,11 @@ name: collect-sixshop-orders
 
 on:
   schedule:
-    # GitHub schedule이 9시간씩 지연되는 패턴 관찰됨 — KST 08:00 보장 X.
-    # 외부 cron 서비스(cron-job.org)에서 KST 08:00에 workflow_dispatch 트리거가 진짜 보장.
+    # GitHub schedule이 9시간씩 지연되는 패턴 관찰됨 — KST 07:00 보장 X.
+    # 외부 cron 서비스(cron-job.org)에서 KST 07:00에 workflow_dispatch 트리거가 진짜 보장.
     # 아래 schedule은 외부 cron 실패 시 fallback (한 번이라도 돌면 OK).
-    - cron: "0 23 * * *"  # UTC 23:00 = KST 08:00 (정시)
-    - cron: "0 1 * * *"   # UTC 01:00 = KST 10:00 (fallback)
+    - cron: "0 22 * * *"  # UTC 22:00 = KST 07:00 (정시)
+    - cron: "0 0 * * *"   # UTC 00:00 = KST 09:00 (fallback)
   # main에 src/ 또는 workflow 변경 push되면 자동 트리거 — PR 머지 후 "수동 트리거" step 제거
   push:
     branches: [main]
