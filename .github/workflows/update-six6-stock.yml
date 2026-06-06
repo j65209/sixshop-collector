@@ -1,0 +1,26 @@
+name: 식스에이 식스샵 단일상품 재고 업데이트
+on:
+  workflow_dispatch:
+    inputs:
+      updates:
+        description: '재고 변경 JSON'
+        required: true
+jobs:
+  update-six6-stock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SIXSHOP_EMAIL: ${{ secrets.SIXSHOP_EMAIL }}
+      SIXSHOP_PASSWORD: ${{ secrets.SIXSHOP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install deps
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+      - name: Run update-six6-stock
+        run: npx tsx src/update-six6-stock.ts '${{ inputs.updates }}'
