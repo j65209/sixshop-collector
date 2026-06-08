@@ -9,9 +9,21 @@
  *   inputs.product_term, inputs.updates (JSON 문자열)
  *
  * cable 매칭 — 식스샵 UI의 "기종 옵션:" 텍스트 substring 매칭:
- *   "Apple 8pin"  → "USB -> Apple 8pin" 또는 "USB - Apple 8pin"
- *   "C type"      → "USB -> C type" 또는 "USB - C type"   (Apple 8pin 제외)
- *   "C to C"      → "C type -> C type" 또는 "C type - C type"
+ *   "Apple 8pin"  → "USB -> Apple 8pin"
+ *   "USB-C"       → "USB -> C type"
+ *   "C to C"      → "C type -> C type"
+ *
+ * 식스샵 admin DOM (2026-06-08 검증):
+ *   - 행 컨테이너: div.tb_content (한 옵션당 1개)
+ *   - 옵션의 "지정" 라디오: input[type=radio][value="setInventory"]
+ *     · id = "setStock<productId>-<optionId>", 라디오 자체는 display:none
+ *     · 옆에 <label for="setStock..."> "지정" 라벨이 있음 → 라벨을 클릭해야 모드 전환
+ *   - 같은 행의 input[type=number] 하나 (현재 모드용) — 지정 모드로 전환 후 채워야 절댓값으로 동작
+ *   - 같은 행의 button "저장"
+ *   - 페이지네이션: div.pagination_div > span.pagination_navi
+ *     · 선택된 페이지: span.pagination_selected
+ *     · 다음 버튼: span.btn-nav-next (마지막 페이지면 .navi-disabled 추가)
+ *     · 페이지당 10개 행 (10개 옵션 + 같은 검색어에 걸린 다른 상품 행 포함될 수 있음)
  */
 import { BRANDS, brandCredentials } from "./brands.js";
 import { newBrowser, newBrandPage, loginAsBrand } from "./sixshop.js";
@@ -35,15 +47,18 @@ function matchesCable(rawOptionText: string, cable: string): boolean {
   const t = rawOptionText.toLowerCase();
   if (cable === "Apple 8pin") return /apple|8\s*pin/i.test(t);
   if (cable === "C to C") {
-    // "c type ... c type" + "usb"가 없으면 C to C
     const ctocCount = (t.match(/c\s*type/g) || []).length;
     return ctocCount >= 2 && !/usb/.test(t);
   }
   if (cable === "USB-C") {
-    // USB 포함 + apple/8pin 없으면 USB-C
     return /usb/.test(t) && !/apple|8\s*pin/.test(t) && /c\s*type/.test(t);
   }
   return false;
+}
+
+interface PendingUpdate extends OptionUpdate {
+  done: boolean;
+  result?: UpdateResult;
 }
 
 async function updateStockForPP(
@@ -53,7 +68,7 @@ async function updateStockForPP(
   const brand = BRANDS.find((b) => b.credEnvSuffix === "_PP");
   if (!brand) throw new Error("PP brand not found in BRANDS");
 
-  const results: UpdateResult[] = [];
+  const pending: PendingUpdate[] = updates.map((u) => ({ ...u, done: false }));
   const browser = await newBrowser();
   const page = await newBrandPage(browser);
 
@@ -66,113 +81,150 @@ async function updateStockForPP(
     )}`;
     console.log(`[update-stock] goto ${url}`);
     await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
-
-    // viewport 충분히 — 저장 버튼이 잘리지 않게
     await page.setViewportSize({ width: 1800, height: 1000 });
 
-    // 옵션 행 모두 수집 + 텍스트 분석
-    // 식스샵 admin: 옵션 행마다 input[type=number] + 같은 row에 "저장" button
-    const numberInputs = await page.locator('input[type="number"]:visible').all();
-    console.log(`[update-stock] visible number inputs: ${numberInputs.length}`);
-
-    if (numberInputs.length === 0) {
-      throw new Error("no number inputs found — search term not matched?");
+    // 검색어 URL 파라미터가 무시되는 경우 대비 — 검색박스에 직접 타이핑 + Enter
+    try {
+      const search = page.locator('input[placeholder*="상품 이름"], input[placeholder*="상품"]').first();
+      const cnt = await search.count();
+      if (cnt > 0) {
+        const cur = (await search.inputValue().catch(() => "")) || "";
+        if (!cur.trim()) {
+          await search.fill(productSearchTerm);
+          await search.press("Enter");
+          await page.waitForTimeout(1500);
+        }
+      }
+    } catch (e) {
+      // best-effort
     }
 
-    for (const u of updates) {
-      try {
-        let matched = false;
-        for (const inp of numberInputs) {
-          // 같은 row의 텍스트 (input의 ancestor row text)
-          const rowText = await inp.evaluate((el) => {
-            // 가장 가까운 'row' 컨테이너 — tr 또는 [class*=row]
-            let node: HTMLElement | null = el as HTMLElement;
-            for (let i = 0; i < 8 && node; i++) {
-              if (
-                node.tagName === "TR" ||
-                /row|item|line/i.test(node.className || "")
-              ) {
-                return node.innerText || "";
-              }
-              node = node.parentElement;
-            }
-            return el.parentElement?.parentElement?.parentElement?.innerText || "";
-          });
+    const MAX_PAGES = 10;
+    for (let pageIdx = 1; pageIdx <= MAX_PAGES; pageIdx++) {
+      // 표 로드 대기
+      await page
+        .waitForSelector('div.tb_content input[type="radio"][value="setInventory"]', { timeout: 15_000 })
+        .catch(() => undefined);
+      await page.waitForTimeout(600);
 
-          const colorMatch = rowText.includes(u.color);
-          const cableMatch = matchesCable(rowText, u.cable);
-          if (!colorMatch || !cableMatch) continue;
+      // 케이블 옵션 행: div.tb_content + setInventory radio 보유 + productSearchTerm 텍스트 포함
+      const rows = await page
+        .locator("div.tb_content")
+        .filter({ has: page.locator('input[type="radio"][value="setInventory"]') })
+        .filter({ hasText: productSearchTerm })
+        .all();
+      console.log(`[update-stock] page ${pageIdx}: ${rows.length} option rows`);
 
-          console.log(`[update-stock] matched row: ${u.color}/${u.cable}`);
+      for (const row of rows) {
+        if (pending.every((u) => u.done)) break;
 
-          // 같은 row의 "지정" radio 클릭 (있으면)
-          const inpHandle = await inp.elementHandle();
-          if (!inpHandle) continue;
-          const rowBox = await inp.evaluate((el) => {
-            let node: HTMLElement | null = el as HTMLElement;
-            for (let i = 0; i < 8 && node; i++) {
-              if (node.tagName === "TR" || /row|item|line/i.test(node.className || "")) {
-                return { selector: "found" };
-              }
-              node = node.parentElement;
-            }
-            return null;
-          });
+        const rowText: string = await row.evaluate((el) =>
+          (el as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+        );
+        const colorMatch = rowText.match(/컬러:\s*([^\s/]+)/);
+        const cableMatch = rowText.match(/기종\s*옵션:\s*(.+?)\s*-\s*(?:\d+(?:,\d+)*\s*개|품절)/);
+        if (!colorMatch || !cableMatch) continue;
+        const rowColor = colorMatch[1].trim();
+        const rowCableRaw = cableMatch[1].trim();
 
-          // "지정" radio — input 형제/조상에 있는 두 번째 radio
-          const radios = inp.locator('xpath=ancestor::*[self::tr or contains(@class,"row")][1]//input[@type="radio"]');
-          const radioCount = await radios.count();
-          if (radioCount >= 2) {
-            await radios.nth(1).check(); // 두 번째 radio = "지정"
-          }
+        const u = pending.find(
+          (p) => !p.done && p.color === rowColor && matchesCable(rowCableRaw, p.cable),
+        );
+        if (!u) continue;
 
-          // input 채우기
-          await inp.fill(String(u.setStock));
-          await inp.evaluate((el) => {
+        try {
+          const radio = row.locator('input[type="radio"][value="setInventory"]').first();
+          const radioId = await radio.getAttribute("id");
+          if (!radioId) throw new Error("setInventory radio has no id");
+          // "지정" 라벨 클릭 — 라디오 자체는 display:none이라 직접 클릭 안 됨
+          const label = page.locator(`label[for="${radioId}"]`).first();
+          await label.click({ timeout: 5_000 });
+          await page.waitForTimeout(300);
+
+          // 같은 행의 number input (지정 모드용) 채우기
+          const numInput = row.locator('input[type="number"]').first();
+          await numInput.waitFor({ state: "visible", timeout: 5_000 });
+          await numInput.fill(String(u.setStock));
+          await numInput.evaluate((el) => {
             (el as HTMLInputElement).dispatchEvent(new Event("input", { bubbles: true }));
             (el as HTMLInputElement).dispatchEvent(new Event("change", { bubbles: true }));
           });
 
-          // 같은 row의 "저장" 버튼 클릭
-          const saveBtn = inp.locator(
-            'xpath=ancestor::*[self::tr or contains(@class,"row")][1]//button[contains(text(),"저장") or contains(.,"저장")]',
-          );
-          await saveBtn.first().waitFor({ state: "visible", timeout: 5_000 });
-          await saveBtn.first().click();
-
-          // 식스샵의 저장 후 확인 모달이나 응답 대기
+          // 같은 행의 "저장" 버튼
+          const saveBtn = row.locator("button", { hasText: "저장" }).first();
+          await saveBtn.waitFor({ state: "visible", timeout: 5_000 });
+          await saveBtn.click();
           await page.waitForTimeout(1500);
 
-          results.push({ color: u.color, cable: u.cable, setStock: u.setStock, status: "ok" });
-          matched = true;
-          break;
-        }
-        if (!matched) {
-          results.push({
+          u.done = true;
+          u.result = { color: u.color, cable: u.cable, setStock: u.setStock, status: "ok" };
+          console.log(`[update-stock] ✓ ${u.color}/${u.cable} = ${u.setStock}`);
+        } catch (e) {
+          u.done = true;
+          u.result = {
             color: u.color,
             cable: u.cable,
             setStock: u.setStock,
-            status: "skip",
-            message: "row not found",
-          });
+            status: "error",
+            message: (e as Error).message,
+          };
+          console.warn(`[update-stock] ✗ ${u.color}/${u.cable}:`, (e as Error).message);
         }
-      } catch (e) {
-        const msg = (e as Error).message;
-        console.warn(`[update-stock] ${u.color}/${u.cable} failed:`, msg);
-        results.push({
+      }
+
+      if (pending.every((u) => u.done)) break;
+
+      // 다음 페이지로
+      const nextBtn = page
+        .locator("div.pagination_div")
+        .filter({ has: page.locator("span.pagination_selected") })
+        .locator("span.btn-nav-next")
+        .first();
+      const hasNext = (await nextBtn.count()) > 0;
+      if (!hasNext) {
+        console.log(`[update-stock] no next page button — stopping at page ${pageIdx}`);
+        break;
+      }
+      const isDisabled = await nextBtn
+        .evaluate((el) => el.classList.contains("navi-disabled"))
+        .catch(() => true);
+      if (isDisabled) {
+        console.log(`[update-stock] reached last page (${pageIdx})`);
+        break;
+      }
+      await nextBtn.click();
+      // 페이지 전환 대기 — pagination_selected의 텍스트가 변할 때까지
+      await page.waitForFunction(
+        (prev) => {
+          const sel = document.querySelector(
+            "div.pagination_div span.pagination_selected",
+          );
+          return sel && (sel.textContent || "").trim() !== String(prev);
+        },
+        pageIdx,
+        { timeout: 8_000 },
+      ).catch(() => undefined);
+      await page.waitForTimeout(600);
+    }
+
+    // 미매칭 분류
+    for (const u of pending) {
+      if (!u.result) {
+        u.result = {
           color: u.color,
           cable: u.cable,
           setStock: u.setStock,
-          status: "error",
-          message: msg,
-        });
+          status: "skip",
+          message: "row not found",
+        };
+        console.warn(`[update-stock] ✗ ${u.color}/${u.cable}: row not found`);
       }
     }
+
+    return pending.map((u) => u.result!);
   } finally {
     await browser.close();
   }
-
-  return results;
 }
 
 async function main(): Promise<void> {
