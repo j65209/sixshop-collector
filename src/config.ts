@@ -18,9 +18,13 @@ function loadServiceAccountJson(): string {
 }
 
 export const config = {
-  sheets: {
-    serviceAccountJson: loadServiceAccountJson(),
-    sheetId: required("SHEET_ID"),
+  // sheets는 실제 접근 시점에만 크리덴셜을 요구 (lazy).
+  // 식스샵 재고 업데이트처럼 시트를 안 쓰는 워크플로가 import만으로 죽지 않도록.
+  get sheets() {
+    return {
+      serviceAccountJson: loadServiceAccountJson(),
+      sheetId: required("SHEET_ID"),
+    };
   },
   collect: {
     headless: (process.env.HEADLESS ?? "true") !== "false",
