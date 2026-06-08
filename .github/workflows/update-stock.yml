@@ -1,0 +1,33 @@
+name: 식스샵 180 케이블 옵션 재고 업데이트
+on:
+  workflow_dispatch:
+    inputs:
+      product_term:
+        description: '식스샵 admin 상품 검색어'
+        required: false
+        default: '180° Fast Charging Cable (8color)'
+      updates:
+        description: '재고 변경 JSON ([{color, cable, setStock}, ...])'
+        required: true
+jobs:
+  update-stock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SIXSHOP_EMAIL_PP: ${{ secrets.SIXSHOP_EMAIL_PP }}
+      SIXSHOP_PASSWORD_PP: ${{ secrets.SIXSHOP_PASSWORD_PP }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install deps
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+      - name: Run update-stock
+        env:
+          PRODUCT_TERM: ${{ inputs.product_term }}
+          UPDATES_JSON: ${{ inputs.updates }}
+        run: npx tsx src/update-stock.ts
