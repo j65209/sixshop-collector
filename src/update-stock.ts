@@ -150,15 +150,29 @@ async function updateStockForPP(
             (el as HTMLInputElement).dispatchEvent(new Event("change", { bubbles: true }));
           });
 
-          // 같은 행의 "저장" 버튼
+          // 같은 행의 "저장" 버튼 — sixshop admin은 값이 안 바뀌면 disabled
+          // (지정 모드 + 같은 값 = no-op). 그 경우 ok, no change로 처리.
           const saveBtn = row.locator("button", { hasText: "저장" }).first();
           await saveBtn.waitFor({ state: "visible", timeout: 5_000 });
-          await saveBtn.click();
-          await page.waitForTimeout(1500);
-
-          u.done = true;
-          u.result = { color: u.color, cable: u.cable, setStock: u.setStock, status: "ok" };
-          console.log(`[update-stock] ✓ ${u.color}/${u.cable} = ${u.setStock}`);
+          await page.waitForTimeout(400);
+          const disabled = await saveBtn.isDisabled().catch(() => false);
+          if (disabled) {
+            u.done = true;
+            u.result = {
+              color: u.color,
+              cable: u.cable,
+              setStock: u.setStock,
+              status: "ok",
+              message: "no change (admin value already matches)",
+            };
+            console.log(`[update-stock] ✓ ${u.color}/${u.cable}: ${u.setStock} (변경 없음)`);
+          } else {
+            await saveBtn.click();
+            await page.waitForTimeout(1500);
+            u.done = true;
+            u.result = { color: u.color, cable: u.cable, setStock: u.setStock, status: "ok" };
+            console.log(`[update-stock] ✓ ${u.color}/${u.cable} = ${u.setStock}`);
+          }
         } catch (e) {
           u.done = true;
           u.result = {
