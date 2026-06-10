@@ -1,0 +1,86 @@
+name: 식스에이 (6thanother) SKU 카탈로그 갱신
+
+# 식스샵 admin → 6A 옵션 포함 SKU JSON → Brightbeed/data/sixA-products.json 자동 push.
+# Brightbeed dashboard 식스에이 뉴 "최신화" 버튼 or 매일 cron이 트리거.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # collect.yml 06:00 KST 직후, 옵션 fetch + push 별도. 1번만.
+    - cron: "10 21 * * *"  # UTC 21:10 = KST 06:10
+
+concurrency:
+  group: list-six6-skus
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run list-six6-skus
+        env:
+          SIXSHOP_EMAIL: ${{ secrets.SIXSHOP_EMAIL }}
+          SIXSHOP_PASSWORD: ${{ secrets.SIXSHOP_PASSWORD }}
+          HEADLESS: "true"
+        run: npx tsx src/list-six6-skus.ts
+
+      - name: Push sixA-products.json to Brightbeed repo
+        env:
+          BRIGHTBEED_PUSH_PAT: ${{ secrets.BRIGHTBEED_PUSH_PAT }}
+        run: |
+          set -e
+          if [ ! -f sixA-products.json ]; then
+            echo "::error::sixA-products.json was not generated"
+            exit 1
+          fi
+          if [ -z "${BRIGHTBEED_PUSH_PAT}" ]; then
+            echo "::warning::BRIGHTBEED_PUSH_PAT secret not set — artifact only, no auto push"
+            exit 0
+          fi
+
+          CURR_SHA=$(curl -fsS \
+            -H "Authorization: token $BRIGHTBEED_PUSH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/j65209/Brightbeed/contents/data/sixA-products.json" \
+            | jq -r '.sha // empty')
+
+          CONTENT_B64=$(base64 -w 0 sixA-products.json)
+
+          PAYLOAD=$(jq -cn \
+            --arg msg "chore(sixA): auto-refresh 식스에이 SKU 카탈로그 (옵션 포함) — run ${{ github.run_id }}" \
+            --arg content "$CONTENT_B64" \
+            --arg sha "$CURR_SHA" \
+            '{message:$msg, content:$content} + (if $sha != "" then {sha:$sha} else {} end)')
+
+          curl -fsS -X PUT \
+            -H "Authorization: token $BRIGHTBEED_PUSH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/j65209/Brightbeed/contents/data/sixA-products.json" \
+            -d "$PAYLOAD" \
+            -o /tmp/push-resp.json
+
+          echo "✓ pushed to Brightbeed/data/sixA-products.json"
+          jq -r '.commit.html_url' /tmp/push-resp.json || true
+
+      - name: Upload as artifact (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sixA-products
+          path: sixA-products.json
+          if-no-files-found: warn
+          retention-days: 30
