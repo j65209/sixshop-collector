@@ -27,6 +27,11 @@ export interface CostMatch {
   cost_match: "exact" | "base" | "none";
 }
 
+// 시트 값보다 우선하는 원가 (사장님 확인값). 시트 E열을 고치면 여기서 지워도 된다.
+const COST_OVERRIDES: Record<string, number> = {
+  "cobaltiny bag (black)": 6750, // 2026-10-27: E열 6,528 · Q열 6,750 중 Q열이 맞음
+};
+
 // 시트 약어 → 옵션 표기
 const SYNONYM: Record<string, string> = { bl: "black", bk: "black", blk: "black", w: "white", wh: "white", iv: "ivory", br: "brown" };
 
@@ -81,6 +86,11 @@ export function costRowsFromCsv(csv: string): CostRow[] {
   for (const r of rows) {
     if (r[2]?.trim() && won(r[4]) > 0) a.push({ name: r[2].trim(), cost: won(r[4]), table: "A" });
     if (r[15]?.trim() && won(r[16]) > 0) b.push({ name: r[15].trim(), cost: won(r[16]), table: "B" });
+  }
+  const overrides = new Map(Object.entries(COST_OVERRIDES).map(([k, v]) => [norm(k), v]));
+  for (const x of [...a, ...b]) {
+    const o = overrides.get(norm(x.name));
+    if (o) x.cost = o;
   }
   const inA = new Set(a.map((x) => norm(x.name)));
   const seenB = new Set<string>();
