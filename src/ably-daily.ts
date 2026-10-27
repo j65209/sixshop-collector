@@ -413,6 +413,10 @@ const ORDERS_HEADER = [
   "결제일", "주문번호", "주문상품번호", "상태", "제외", "상품명", "옵션", "수량", "판매금액", "쿠폰할인",
   "에이블리부담쿠폰", "적립금", "결제혜택", "실결제", "원가", "원가 시트 상품명", "원가 매칭", "배송유형",
 ];
+// 평소 볼 필요 없는 열 — 탭을 처음 만들 때만 접어둔다. 값은 계속 기록한다
+// (주문번호는 배송비 계산 단위, 상태는 "제외" 판정 근거라 지우면 검산이 안 된다).
+// 이후 사장님이 직접 펼치면 그 선택을 매일 되돌리지 않도록 생성 시점에만 적용.
+const ORDERS_COLLAPSED_COLUMNS = ["주문번호", "상태"];
 
 async function writeSheets(report: Report): Promise<void> {
   const { config } = await import("./config.js");
@@ -423,7 +427,7 @@ async function writeSheets(report: Report): Promise<void> {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   for (const [tab, header] of [[DAILY_TAB, DAILY_HEADER], [ORDERS_TAB, ORDERS_HEADER]] as const) {
     if (!meta.data.sheets?.some((s) => s.properties?.title === tab)) {
-      await sheets.spreadsheets.batchUpdate({
+      const created = await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         requestBody: { requests: [{ addSheet: { properties: { title: tab } } }] },
       });
@@ -433,6 +437,26 @@ async function writeSheets(report: Report): Promise<void> {
         valueInputOption: "RAW",
         requestBody: { values: [header as unknown as string[]] },
       });
+      const gid = created.data.replies?.[0]?.addSheet?.properties?.sheetId;
+      if (tab === ORDERS_TAB && gid != null) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: ORDERS_COLLAPSED_COLUMNS.map((name) => ({
+              updateDimensionProperties: {
+                range: {
+                  sheetId: gid,
+                  dimension: "COLUMNS",
+                  startIndex: header.indexOf(name),
+                  endIndex: header.indexOf(name) + 1,
+                },
+                properties: { hiddenByUser: true },
+                fields: "hiddenByUser",
+              },
+            })),
+          },
+        });
+      }
     }
   }
 
