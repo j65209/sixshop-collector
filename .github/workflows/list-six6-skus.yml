@@ -55,7 +55,7 @@ jobs:
           CURR_SHA=$(curl -fsS \
             -H "Authorization: token $BRIGHTBEED_PUSH_PAT" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/j65209/Brightbeed/contents/data/sixA-products.json" \
+            "https://api.github.com/repos/j65209/beaduniverse/contents/data/sixA-products.json" \
             | jq -r '.sha // empty')
 
           CONTENT_B64=$(base64 -w 0 sixA-products.json)
@@ -69,7 +69,7 @@ jobs:
           curl -fsS -X PUT \
             -H "Authorization: token $BRIGHTBEED_PUSH_PAT" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/j65209/Brightbeed/contents/data/sixA-products.json" \
+            "https://api.github.com/repos/j65209/beaduniverse/contents/data/sixA-products.json" \
             -d "$PAYLOAD" \
             -o /tmp/push-resp.json
 
