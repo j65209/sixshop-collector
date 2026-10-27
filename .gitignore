@@ -8,6 +8,7 @@ playwright-report
 test-results
 auth-state.json
 .claude/settings.local.json
+_ably-*.json
 
 # 로컬 디버깅 스크립트/아티팩트
 inspect-*.mjs
