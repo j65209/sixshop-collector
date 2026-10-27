@@ -8,20 +8,21 @@
  * 하는 일:
  *   1. 에이블리 셀러 어드민 API 로그인 (docs/ABLY-API.md)
  *   2. 결제일 기준 주문 · 정산 수수료율 · 광고비 · 기획전 · 쿠폰 수집
- *   3. 순이익 = 정산 추정액 − 배송비(주문번호당 2,000원) − 에이블리 광고비
+ *   3. 순이익 = 정산 추정액 − 배송비(주문번호당 2,200원) − 에이블리 광고비 − 원가(src/ably-cost.ts, 원가 시트 매칭)
  *   4. 비공개 레포 j65209/brightbeed-reports 에 ably/daily/{date}.json · ably/index.json 기록 (오피스가 프록시로 읽음)
  *   5. 구글시트 "에이블리_일일"(날짜별 요약) · "에이블리_주문"(주문상품별) 탭에 기록
  *
  * 구매자 이름 · 연락처 · 주소 · 메모는 어디에도 저장하지 않는다.
  *
  * env: ABLY_EMAIL, ABLY_PASSWORD, ABLY_AD_MARKET_SNO, REPORTS_GITHUB_TOKEN
- *      (선택) ABLY_MARKET_NAME, ABLY_SHIPPING_COST(기본 2000), REPORTS_REPO(기본 j65209/brightbeed-reports), ABLY_SKIP_SHEETS=1
+ *      (선택) ABLY_MARKET_NAME, ABLY_SHIPPING_COST(기본 2200), REPORTS_REPO(기본 j65209/brightbeed-reports), ABLY_SKIP_SHEETS=1
  *      + 기존 SHEET_ID · GOOGLE_SERVICE_ACCOUNT_PATH|JSON
  */
 import "dotenv/config";
+import { loadCostRows, matchCost } from "./ably-cost.js";
 
 const API = "https://api.a-bly.com";
-const SHIPPING_COST = Number(process.env.ABLY_SHIPPING_COST ?? 2000);
+const SHIPPING_COST = Number(process.env.ABLY_SHIPPING_COST ?? 2200);
 const REPORTS_REPO = process.env.REPORTS_REPO ?? "j65209/brightbeed-reports";
 const MARKET_NAME = process.env.ABLY_MARKET_NAME ?? "코페리";
 // 취소·반품·환불은 매출에서 제외 (상태 문자열은 에이블리 내부 코드라 패턴으로 판별)
@@ -257,17 +258,19 @@ async function fetchCoupons(date: string) {
 /* ---------------- 보고서 계산 ---------------- */
 
 async function buildReport(date: string) {
-  const [items, fee, ad, events, coupons] = await Promise.all([
+  const [items, fee, ad, events, coupons, costRows] = await Promise.all([
     fetchOrders(date),
     fetchFeeRate(date),
     fetchAdSpend(date),
     fetchEvents(date),
     fetchCoupons(date),
+    loadCostRows(),
   ]);
 
   const orders = items.map((o) => {
     const excluded = EXCLUDED_STATUS.test(o.status ?? "");
     const discount = (o.exact_coupon_discount || 0) + (o.exact_emoney_discount || 0) + (o.exact_pay_benefit_discount || 0);
+    const cm = matchCost(costRows, o.goods_name ?? "", o.goods_custom_code ?? "", o.option_info ?? "");
     return {
       sno: o.sno,
       order_sno: o.order_sno,
@@ -287,13 +290,17 @@ async function buildReport(date: string) {
       emoney: o.exact_emoney_discount || 0,
       pay_benefit: o.exact_pay_benefit_discount || 0,
       paid: o.exact_amount || 0,
+      cost_unit: cm.cost_unit,
+      cost: cm.cost_unit != null ? cm.cost_unit * (o.ea || 1) : 0,
+      cost_name: cm.cost_name,
+      cost_match: cm.cost_match,
       delivery_type: o.delivery_type,
       pay_method: o.pay_method_name,
     };
   });
 
   const live = orders.filter((o) => !o.excluded);
-  const sum = (arr: typeof orders, k: "gross" | "coupon" | "paid" | "ea" | "coupon_by_ably") =>
+  const sum = (arr: typeof orders, k: "gross" | "coupon" | "paid" | "ea" | "coupon_by_ably" | "cost") =>
     arr.reduce((s, o) => s + (o[k] || 0), 0);
   const orderNos = new Set(live.map((o) => o.order_sno));
   const couponOrderNos = new Set(live.filter((o) => o.coupon > 0).map((o) => o.order_sno));
@@ -302,7 +309,8 @@ async function buildReport(date: string) {
   const feesEst = Math.round(paid * fee.rate);
   const settleEst = paid - feesEst;
   const shipping = orderNos.size * SHIPPING_COST;
-  const net = settleEst - shipping - ad.charge;
+  const cost = sum(live, "cost");
+  const net = settleEst - shipping - ad.charge - cost;
 
   return {
     date,
@@ -313,6 +321,7 @@ async function buildReport(date: string) {
       shipping_cost_per_order: SHIPPING_COST,
       fee_rate: Number(fee.rate.toFixed(4)),
       fee_basis: fee.basis,
+      cost_basis: "원가 시트(기획전 계산기 시트) E열 → 없으면 Q열, 상품명·옵션으로 매칭",
       date_basis: "결제일(checked_at)",
       excluded_status: "취소·반품·환불 상태는 매출에서 제외",
     },
@@ -330,6 +339,9 @@ async function buildReport(date: string) {
       shipping,
       ad_spend: ad.charge,
       ad_order_price: ad.adOrderPrice,
+      cost,
+      cost_missing_items: live.filter((o) => o.cost_match === "none").length,
+      cost_base_items: live.filter((o) => o.cost_match === "base").length,
       net,
       net_rate: paid ? Number((net / paid).toFixed(4)) : 0,
       excluded_items: orders.length - live.length,
@@ -373,7 +385,7 @@ async function ghGetJson<T>(path: string): Promise<T | null> {
 
 async function writeRepo(report: Report): Promise<void> {
   await ghPut(`ably/daily/${report.date}.json`, report, `ably: daily ${report.date}`);
-  type IndexRow = { date: string } & Pick<Report["summary"], "orders" | "paid" | "net" | "ad_spend" | "coupon_orders">;
+  type IndexRow = { date: string } & Pick<Report["summary"], "orders" | "paid" | "net" | "ad_spend" | "coupon_orders" | "cost">;
   const idx = (await ghGetJson<{ days: IndexRow[] }>("ably/index.json")) ?? { days: [] };
   const s = report.summary;
   const row: IndexRow = {
@@ -383,6 +395,7 @@ async function writeRepo(report: Report): Promise<void> {
     net: s.net,
     ad_spend: s.ad_spend,
     coupon_orders: s.coupon_orders,
+    cost: s.cost,
   };
   idx.days = [row, ...idx.days.filter((d) => d.date !== report.date)].sort((a, b) => b.date.localeCompare(a.date));
   await ghPut("ably/index.json", { updated_at: report.generated_at, days: idx.days }, `ably: index ${report.date}`);
@@ -394,11 +407,11 @@ const DAILY_TAB = "에이블리_일일";
 const ORDERS_TAB = "에이블리_주문";
 const DAILY_HEADER = [
   "날짜", "주문수", "상품건수", "수량", "판매금액", "쿠폰할인", "쿠폰주문수", "실결제", "수수료(추정)",
-  "정산(추정)", "배송비", "광고비", "순이익", "순이익률", "진행중 기획전", "수수료율", "생성시각",
+  "정산(추정)", "배송비", "광고비", "원가", "순이익", "순이익률", "진행중 기획전", "수수료율", "원가 미확인", "생성시각",
 ];
 const ORDERS_HEADER = [
   "결제일", "주문번호", "주문상품번호", "상태", "제외", "상품명", "옵션", "수량", "판매금액", "쿠폰할인",
-  "에이블리부담쿠폰", "적립금", "결제혜택", "실결제", "배송유형",
+  "에이블리부담쿠폰", "적립금", "결제혜택", "실결제", "원가", "원가 시트 상품명", "원가 매칭", "배송유형",
 ];
 
 async function writeSheets(report: Report): Promise<void> {
@@ -427,8 +440,8 @@ async function writeSheets(report: Report): Promise<void> {
   const s = report.summary;
   const dailyRow = [
     report.date, s.orders, s.items, s.qty, s.gross, s.coupon_discount, s.coupon_orders, s.paid, s.fees_est,
-    s.settle_est, s.shipping, s.ad_spend, s.net, s.net_rate, s.events_running, report.assumptions.fee_rate,
-    report.generated_at,
+    s.settle_est, s.shipping, s.ad_spend, s.cost, s.net, s.net_rate, s.events_running, report.assumptions.fee_rate,
+    s.cost_missing_items, report.generated_at,
   ];
   const dates = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${DAILY_TAB}!A:A` });
   const rowIdx = (dates.data.values ?? []).findIndex((r) => r[0] === report.date);
@@ -456,7 +469,8 @@ async function writeSheets(report: Report): Promise<void> {
     .filter((o) => !have.has(String(o.sno)))
     .map((o) => [
       report.date, o.order_sno, o.sno, o.status, o.excluded ? "Y" : "", o.goods_name, o.option, o.ea, o.gross,
-      o.coupon, o.coupon_by_ably, o.emoney, o.pay_benefit, o.paid, o.delivery_type,
+      o.coupon, o.coupon_by_ably, o.emoney, o.pay_benefit, o.paid, o.cost_unit != null ? o.cost : "",
+      o.cost_name ?? "", { exact: "일치", base: "기본값", none: "미확인" }[o.cost_match], o.delivery_type,
     ]);
   if (rows.length) {
     await sheets.spreadsheets.values.append({
