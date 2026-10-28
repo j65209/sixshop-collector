@@ -33,7 +33,7 @@ fake npm <<'EOF'
 echo "npm $*" >>"$FAKE_LAUNCHD/calls.log"
 case "$1" in
   ci) mkdir -p node_modules; echo "fake npm ci" ;;
-  run) echo "fake run $2"; sleep "${FAKE_JOB_SLEEP:-0}"; exit "${FAKE_JOB_RC:-0}" ;;
+  run) echo "fake run $2"; [ -n "${FAKE_JOB_MSG:-}" ] && echo "$FAKE_JOB_MSG"; sleep "${FAKE_JOB_SLEEP:-0}"; exit "${FAKE_JOB_RC:-0}" ;;
 esac
 EOF
 fake launchctl <<'EOF'
@@ -176,6 +176,8 @@ check "또 성공이면 상태를 다시 안 올림 (30분 작업이 커밋을 �
 check "로그에 시작 · 완료" 'grep -q "\[ably-daily\] 시작: npm run ably-daily" "$LG/brightbeed-ably-daily.log" && grep -q "\[ably-daily\] 완료" "$LG/brightbeed-ably-daily.log" && grep -q "fake run ably-daily" "$LG/brightbeed-ably-daily.log"'
 FAKE_JOB_RC=3 bash "$C/mac/run-job.sh" ably-daily
 check "실패 기록 (종료 코드 3)" 'grep -qx "detail=종료 코드 3" "$AH/state/status-ably-daily.txt"'
+FAKE_JOB_RC=1 FAKE_JOB_MSG="[ably-daily] 실패: 에이블리 로그인 실패" bash "$C/mac/run-job.sh" ably-daily
+check "실패하면 마지막 오류 줄도 상태에 (맥에 가지 않고 원인 보기)" 'grep -qxF "detail=종료 코드 1 — [ably-daily] 실패: 에이블리 로그인 실패" "$AH/state/status-ably-daily.txt"'
 cp "$C/.env" "$T/env.bak"; grep -v "^ABLY_PASSWORD" "$T/env.bak" >"$C/.env"
 bash "$C/mac/run-job.sh" ably-daily
 check "설정값 없으면 실행 안 함" 'grep -qx "detail=설정값 없음: ABLY_PASSWORD" "$AH/state/status-ably-daily.txt"'

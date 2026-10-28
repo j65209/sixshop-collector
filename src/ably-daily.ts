@@ -19,8 +19,9 @@
  *      + 기존 SHEET_ID · GOOGLE_SERVICE_ACCOUNT_PATH|JSON
  */
 import "dotenv/config";
-import { loadCostRows, matchCost } from "./ably-cost.js";
-import { REPORTS_REPO, writeDailyReport } from "./reports-repo.js";
+import { readFileSync } from "node:fs";
+import { loadCostRows, matchCost, type CostRow } from "./ably-cost.js";
+import { commitFiles, ghGetJson, indexRowOf, mergeIndexRows, REPORTS_REPO, writeDailyReport, type IndexRow } from "./reports-repo.js";
 
 const API = "https://api.a-bly.com";
 const SHIPPING_COST = Number(process.env.ABLY_SHIPPING_COST ?? 2200);
@@ -136,20 +137,29 @@ interface SettlementHistory {
   category_fees: number;
 }
 
-/** 최근 정산 내역의 (결제수수료+판매수수료+카테고리수수료)/결제액 — 주문 단위 수수료가 API에 없어 추정에 사용 */
-async function fetchFeeRate(date: string): Promise<{ rate: number; basis: string }> {
-  // 정산 내역은 월 단위(YYYY-MM) 파라미터만 받는다 — 일자를 넣으면 500
+/** 수수료율을 볼 정산 내역 기간 — 그날 달 포함 3개월 (정산 내역은 월 단위 YYYY-MM 만 받는다, 일자면 500) */
+export function feeWindow(date: string): { startMonth: string; endMonth: string } {
   const [y, m] = date.split("-").map(Number);
-  const startMonth = new Date(Date.UTC(y, m - 1 - 2, 1)).toISOString().slice(0, 7);
-  const j = await get<{ balance_accounts_histories: SettlementHistory[] }>("/seller/balance_accounts/histories/", {
-    start_date: startMonth,
-    end_date: date.slice(0, 7),
-  });
-  const rows = (j.balance_accounts_histories ?? []).filter((h) => h.payment_amount > 0);
+  return { startMonth: new Date(Date.UTC(y, m - 1 - 2, 1)).toISOString().slice(0, 7), endMonth: date.slice(0, 7) };
+}
+
+/** 최근 정산 내역의 (결제수수료+판매수수료+카테고리수수료)/결제액 — 주문 단위 수수료가 API에 없어 추정에 사용 */
+export function feeRateFrom(histories: SettlementHistory[], date: string): { rate: number; basis: string } {
+  const { startMonth, endMonth } = feeWindow(date);
+  const rows = histories.filter((h) => h.payment_amount > 0);
   const pay = rows.reduce((s, h) => s + h.payment_amount, 0);
   const fees = rows.reduce((s, h) => s + h.payment_fees + h.platform_fees + h.category_fees, 0);
   if (!pay) return { rate: 0.275, basis: "기본값 27.5% (최근 정산 내역 없음)" };
-  return { rate: fees / pay, basis: `${startMonth}~${date.slice(0, 7)} 정산 ${rows.length}건 · 결제 ${pay.toLocaleString("ko-KR")}원 기준` };
+  return { rate: fees / pay, basis: `${startMonth}~${endMonth} 정산 ${rows.length}건 · 결제 ${pay.toLocaleString("ko-KR")}원 기준` };
+}
+
+async function fetchFeeRate(date: string): Promise<{ rate: number; basis: string }> {
+  const { startMonth, endMonth } = feeWindow(date);
+  const j = await get<{ balance_accounts_histories: SettlementHistory[] }>("/seller/balance_accounts/histories/", {
+    start_date: startMonth,
+    end_date: endMonth,
+  });
+  return feeRateFrom(j.balance_accounts_histories ?? [], date);
 }
 
 async function fetchAdSpend(date: string): Promise<{ charge: number; adOrderPrice: number }> {
@@ -190,8 +200,13 @@ async function fetchEvents(date: string) {
       if (!j.max_page_number || page >= j.max_page_number) break;
     }
   }
+  return eventsOn([...seen.values()], date);
+}
+
+/** 기획전 목록 → 그날 기준 상태 (예정 · 진행중 · 승인대기, 끝난 것은 뺌) */
+export function eventsOn(list: AblyEvent[], date: string) {
   const day = (s: string) => String(s ?? "").slice(0, 10);
-  return [...seen.values()]
+  return list
     .filter((e) => e.is_applied || e.approved_goods_count > 0)
     .map((e) => {
       // 기간 안이어도 승인된 상품이 없으면 실제로 할인 중이 아니므로 "승인대기"
@@ -237,7 +252,12 @@ async function fetchCoupons(date: string) {
   const j = await get<{ coupons: AblyCoupon[] }>("/seller/coupons/", { page: 1, per_page: 100 }).catch(() => ({
     coupons: [] as AblyCoupon[],
   }));
-  return (j.coupons ?? [])
+  return couponsOn(j.coupons ?? [], date);
+}
+
+/** 쿠폰 목록 → 그날 끝나지 않은 쿠폰 */
+export function couponsOn(list: AblyCoupon[], date: string) {
+  return list
     .filter((c) => !c.finished_at || String(c.finished_at).slice(0, 10) >= date)
     .map((c) => ({
       sno: c.sno,
@@ -266,7 +286,22 @@ async function buildReport(date: string) {
     fetchCoupons(date),
     loadCostRows(),
   ]);
+  return buildAblyReport(date, { items, fee, ad, events, coupons }, costRows);
+}
 
+/** 받아 온 데이터로 하루 보고서 계산 (네트워크 없음 — 지난 기간 채우기 --raw 와 같이 씀) */
+export function buildAblyReport(
+  date: string,
+  d: {
+    items: AblyOrderItem[];
+    fee: { rate: number; basis: string };
+    ad: { charge: number; adOrderPrice: number };
+    events: ReturnType<typeof eventsOn>;
+    coupons: ReturnType<typeof couponsOn>;
+  },
+  costRows: CostRow[],
+) {
+  const { items, fee, ad, events, coupons } = d;
   const orders = items.map((o) => {
     const excluded = EXCLUDED_STATUS.test(o.status ?? "");
     const discount = (o.exact_coupon_discount || 0) + (o.exact_emoney_discount || 0) + (o.exact_pay_benefit_discount || 0);
@@ -353,7 +388,7 @@ async function buildReport(date: string) {
   };
 }
 
-type Report = Awaited<ReturnType<typeof buildReport>>;
+type Report = ReturnType<typeof buildAblyReport>;
 
 /* ---------------- 비공개 레포 기록 (src/reports-repo.ts) ---------------- */
 
@@ -443,9 +478,61 @@ async function writeSheets(report: Report): Promise<void> {
   }
 }
 
+/* ---------------- 지난 기간 채우기 (--raw) ---------------- */
+
+/** 셀러 어드민 화면에서 받아 둔 데이터 (구매자 정보 없음) — 만드는 법은 docs/ABLY-API.md "지난 기간 채우기" */
+interface AblyRaw {
+  from: string;
+  to: string;
+  orders: AblyOrderItem[];
+  ad: { datetime: string; charge: number; order_price: number }[];
+  /** 키 = 그날 달(YYYY-MM), 값 = feeWindow 3개월 정산 내역 */
+  fees: Record<string, SettlementHistory[]>;
+  events: AblyEvent[];
+  coupons: AblyCoupon[];
+}
+
+async function backfill(path: string, dry: boolean): Promise<void> {
+  const raw = JSON.parse(readFileSync(path, "utf8")) as AblyRaw;
+  const costRows = await loadCostRows();
+  const next = (d: string) => new Date(Date.parse(`${d}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10);
+  const files: { path: string; content: unknown }[] = [];
+  const rows: IndexRow[] = [];
+  for (let d = raw.from; d <= raw.to; d = next(d)) {
+    const items = raw.orders.filter((o) => String(o.checked_at).slice(0, 10) === d);
+    const adRows = raw.ad.filter((r) => String(r.datetime).startsWith(d));
+    const report = buildAblyReport(
+      d,
+      {
+        items,
+        fee: feeRateFrom(raw.fees[d.slice(0, 7)] ?? [], d),
+        ad: { charge: adRows.reduce((s, r) => s + (r.charge || 0), 0), adOrderPrice: adRows.reduce((s, r) => s + (r.order_price || 0), 0) },
+        events: eventsOn(raw.events, d),
+        // 그날 이후에 시작한 쿠폰은 빼기 (목록은 지금 기준이라)
+        coupons: couponsOn(raw.coupons.filter((c) => !c.started_at || String(c.started_at).slice(0, 10) <= d), d),
+      },
+      costRows,
+    );
+    const s = report.summary;
+    console.log(`[ably-daily] ${d} 주문 ${s.orders} · 실결제 ${s.paid.toLocaleString("ko-KR")} · 광고비 ${s.ad_spend.toLocaleString("ko-KR")} · 원가 ${s.cost.toLocaleString("ko-KR")} · 순이익 ${s.net.toLocaleString("ko-KR")} · 원가 미확인 ${s.cost_missing_items}건`);
+    files.push({ path: `ably/daily/${d}.json`, content: report });
+    rows.push(indexRowOf(report));
+  }
+  if (dry) {
+    console.log(`[ably-daily] 시험 — ${rows.length}일 계산만, 기록 안 함`);
+    return;
+  }
+  const idx = (await ghGetJson<{ days: IndexRow[] }>("ably/index.json")) ?? { days: [] };
+  files.push({ path: "ably/index.json", content: { updated_at: new Date().toISOString(), days: mergeIndexRows(idx.days, rows) } });
+  const sha = await commitFiles(files, `ably: ${raw.from} ~ ${raw.to} 지난 기간 채움 (셀러 어드민에서 받은 주문)`);
+  console.log(`[ably-daily] ${REPORTS_REPO} ${rows.length}일 커밋 ${sha?.slice(0, 7)}`);
+}
+
 /* ---------------- main ---------------- */
 
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--raw")) return backfill(argv[argv.indexOf("--raw") + 1] ?? "", argv.includes("--dry"));
   const date = process.argv[2] ?? yesterdayKst();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`날짜 형식은 YYYY-MM-DD: ${date}`);
   await login();

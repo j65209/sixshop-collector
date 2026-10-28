@@ -60,6 +60,22 @@
 
 맥미니에서 매일 07:10 자동 실행 — `mac/jobs/ably-daily.job` (자동 설치 관리자, [`mac/README.md`](../mac/README.md)). 설정값은 맥미니 `~/brightbeed-auto/sixshop-collector/.env`.
 
+## 지난 기간 채우기 (`--raw`)
+
+맥미니 매일 실행 전 기간을 채울 때. 로그인된 셀러 어드민 화면(크롬, 코페리 계정)에서 데이터를 한 번에 받아 파일로 저장하고
+(구매자 정보 없이 — 주문은 `AblyOrderItem` 필드만), 이 PC 에서 날짜마다 같은 계산(`buildAblyReport`)으로 보고서를 만들어 **커밋 하나**로 올린다.
+
+```bash
+npx tsx src/ably-daily.ts --raw ably-kop-orders-2026-08-28_2026-10-27.json --dry   # 계산만
+REPORTS_GITHUB_TOKEN=… npx tsx src/ably-daily.ts --raw ably-kop-orders-….json      # 올리기 (구글시트는 안 씀)
+```
+
+파일: `{from, to, orders[], ad[{datetime, charge, order_price}], fees{"YYYY-MM": 그 달 기준 3개월 정산 내역[]}, events[], coupons[]}`
+— 주문은 `order_items` 를 `date_type=checked_at` 로 from 00:00 ~ to 23:59 (per_page 100, `total-count` 와 건수 맞출 것),
+광고비는 `statistics_timeseries` 를 기간 전체로 한 번. 2026-10-28 에 8/28 ~ 10/27(61일, 1,707건)을 이렇게 채움.
+쿠폰 · 기획전 목록은 지금 기준이라 지난 날짜엔 그날 이후 시작한 쿠폰은 뺀다. 크롬이 다른 마켓 계정으로 로그인돼 있으면
+광고비(ad_market 46903)가 404 — 코페리 계정인지 먼저 확인.
+
 ## 기타
 
 - 통계: `GET /seller/statistics/`, `GET /seller/statistics/goods/` (`results[]`)

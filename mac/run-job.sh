@@ -6,7 +6,7 @@
 
 # 실제 실행 — 종료 코드를 돌려줌 (잠금·로그·상태 보고는 main 에서)
 run_job(){
-  local id=$1 f=$2 missing run timeout pid wd rc start dur waited=0
+  local id=$1 f=$2 missing run timeout pid wd rc start dur size0 why waited=0
   if [ ! -f "$f" ]; then log "[$id] 작업 정의가 없어요 ($f) — 저장소에서 지워진 작업"; return 0; fi
   if [ "$(job_get "$f" ENABLED)" = "0" ]; then log "[$id] 꺼진 작업 — 건너뜀"; return 0; fi
 
@@ -30,6 +30,8 @@ run_job(){
 
   log "[$id] 시작: $run (코드 $(git -C "$CLONE_DIR" rev-parse --short HEAD 2>/dev/null))"
   start=$(date +%s)
+  # 이번 실행 출력만 보려고 로그 크기를 기억 (실패하면 마지막 오류 줄을 상태에 같이 남김 — 맥에 가지 않고 원인 보기)
+  size0=$(wc -c <"$(job_log "$id")" 2>/dev/null | tr -d ' '); case "$size0" in ''|*[!0-9]*) size0=0 ;; esac
   cd "$CLONE_DIR" || { status_write "$id" fail "폴더 없음"; return 1; }
   /bin/bash -c "$run" &
   pid=$!
@@ -43,8 +45,10 @@ run_job(){
     log "[$id] 완료 (${dur}초)"
     status_write "$id" ok "완료 ${dur}초"
   else
+    # 작업이 찍은 마지막 오류 줄 (예: "[home-live] 실패: …") — 앞 200바이트만
+    why=$(tail -c +$((size0 + 1)) "$(job_log "$id")" 2>/dev/null | grep -E '실패|Error|error' | tail -n 1 | head -c 200 | tr -d '\r')
     log "[$id] 실패: 종료 코드 $rc (${dur}초)"
-    status_write "$id" fail "종료 코드 $rc"
+    if [ -n "$why" ]; then status_write "$id" fail "종료 코드 $rc — $why"; else status_write "$id" fail "종료 코드 $rc"; fi
   fi
   return $rc
 }
