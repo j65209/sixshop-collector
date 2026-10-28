@@ -1,5 +1,5 @@
 /**
- * 에이블리 일일 보고서 수집기 — 맥미니 launchd 에서 매일 아침 실행.
+ * 에이블리 일일 보고서 수집기 — 맥미니 launchd 에서 매일 아침 실행 (mac/jobs/ably-daily.job, 자동 설치 관리자).
  *
  * 사용법:
  *   npx tsx src/ably-daily.ts              # 어제(KST) 보고서

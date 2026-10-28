@@ -1,0 +1,8 @@
+# 에이블리 일일 보고서 (코페리) — 어제(KST)분을 비공개 레포 brightbeed-reports/ably/ 와 구글시트에 기록.
+# 오피스 전략팀 → 플랫폼 탭 "코페리 · 에이블리"가 읽는다. 오피스 에이전트 오피스의 릴리(07:10)와 같은 시각.
+# 형식: mac/README.md "작업 추가하기"
+DESC=에이블리 일일 보고서 (코페리)
+RUN=npm run ably-daily
+AT=07:10
+REQUIRES=ABLY_EMAIL ABLY_PASSWORD ABLY_AD_MARKET_SNO REPORTS_GITHUB_TOKEN
+TIMEOUT_MIN=20

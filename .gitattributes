@@ -1,0 +1,2 @@
+# 맥미니에서 도는 스크립트·작업 정의는 항상 LF — Windows 의 core.autocrlf 와 상관없이 (CRLF 면 bash 가 깨짐)
+mac/** text eol=lf

@@ -58,6 +58,8 @@
 
 `npm run ably-daily [YYYY-MM-DD]` → `src/ably-daily.ts`. 결과는 비공개 레포 `j65209/brightbeed-reports`의 `ably/daily/{date}.json`·`ably/index.json`과 구글시트 `에이블리_일일`·`에이블리_주문` 탭. 오피스 "전략팀 → 플랫폼 탭 → 코페리 · 에이블리"가 프록시로 읽는다 (전략팀은 전승훈·전수빈·김수민만).
 
+맥미니에서 매일 07:10 자동 실행 — `mac/jobs/ably-daily.job` (자동 설치 관리자, [`mac/README.md`](../mac/README.md)). 설정값은 맥미니 `~/brightbeed-auto/sixshop-collector/.env`.
+
 ## 기타
 
 - 통계: `GET /seller/statistics/`, `GET /seller/statistics/goods/` (`results[]`)

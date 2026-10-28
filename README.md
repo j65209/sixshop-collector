@@ -15,6 +15,7 @@
 | [`docs/OPERATION.md`](docs/OPERATION.md) | **매일 운영** — 시트 보는 법, 명령, 문제 대응 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **코드 구조** — Claude Code가 작업할 때 읽는 컨텍스트 |
 | [`docs/EXTERNAL-CRON.md`](docs/EXTERNAL-CRON.md) | **cron-job.org 셋업** — KST 08:00 정확 갱신 보장 |
+| [`mac/README.md`](mac/README.md) | **맥미니 자동 설치** — GitHub 에 올린 수집기(`mac/jobs/*.job`)를 맥미니가 알아서 설치·실행 |
 
 ## 🚀 빠른 시작
 
