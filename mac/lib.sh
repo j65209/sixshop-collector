@@ -222,6 +222,70 @@ trim_log(){
   rm -f "$f.tmp"
 }
 
+# ---------- 서버 상태 보고 (비공개 보고서 레포 mac/status.json) ----------
+# 맥에 가지 않고도 이 PC·오피스에서 맥미니가 살아 있는지, 작업이 어떻게 됐는지 보는 용도.
+# 자동 확인(sync)이 끝날 때와 작업이 끝날 때 올린다 — 내용이 바뀌었거나 3시간이 지났을 때만 (15분마다 커밋 방지).
+json_str(){ printf '"%s"' "$(printf '%s' "$1" | tr '\t\r\n' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
+
+deps_state(){
+  [ -d "$CLONE_DIR/node_modules" ] || { if [ -f "$STATE_DIR/deps.failed" ]; then printf failed; else printf missing; fi; return 0; }
+  if [ "$(cksum <"$CLONE_DIR/package-lock.json" 2>/dev/null | awk '{print $1 "-" $2}')" = "$(cat "$STATE_DIR/deps.cksum" 2>/dev/null)" ]; then
+    printf ok
+  else
+    printf outdated
+  fi
+}
+
+status_json(){
+  local f id inst sep="" last nodev envf mgr
+  last=$(grep '^at=' "$STATE_DIR/last-sync.txt" 2>/dev/null | cut -d= -f2-)
+  nodev=$(node_problem); [ -n "$nodev" ] || nodev=$(node -v 2>/dev/null)
+  if [ -f "$CLONE_DIR/.env" ]; then envf=true; else envf=false; fi
+  if lc_loaded "$MANAGER_LABEL"; then mgr=on; else mgr=off; fi
+  printf '{\n "updated_at": %s,\n "last_sync": %s,\n "commit": %s,\n "node": %s,\n "deps": %s,\n "env_file": %s,\n "manager": %s,\n "jobs": [' \
+    "$(json_str "$(date '+%F %T')")" "$(json_str "$last")" "$(json_str "$(git -C "$CLONE_DIR" rev-parse --short HEAD 2>/dev/null)")" \
+    "$(json_str "$nodev")" "$(json_str "$(deps_state)")" "$envf" "$(json_str "$mgr")"
+  for f in "$CLONE_DIR"/mac/jobs/*.job; do
+    [ -f "$f" ] || continue
+    id=$(basename "$f" .job)
+    if [ "$(job_get "$f" ENABLED)" = "0" ]; then inst=off
+    elif lc_loaded "$LABEL_PREFIX$id"; then inst=installed
+    else inst=not_installed; fi
+    printf '%s\n  {"id": %s, "desc": %s, "schedule": %s, "state": %s, "running": %s, "last_result": %s, "last_at": %s, "last_detail": %s, "missing_env": %s}' \
+      "$sep" "$(json_str "$id")" "$(json_str "$(job_get "$f" DESC)")" "$(json_str "$(schedule_text "$f")")" "$(json_str "$inst")" \
+      "$(if lock_busy "run-$id"; then echo true; else echo false; fi)" \
+      "$(json_str "$(status_get "$id" result)")" "$(json_str "$(status_get "$id" at)")" "$(json_str "$(status_get "$id" detail)")" \
+      "$(json_str "$(env_missing "$f")")"
+    sep=","
+  done
+  printf '\n ]\n}\n'
+}
+
+push_status(){
+  local tok repo api tmp now sha shaj body
+  tok=$(env_value REPORTS_GITHUB_TOKEN)
+  is_placeholder "$tok" && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  repo=$(env_value REPORTS_REPO); repo=${repo:-j65209/brightbeed-reports}
+  tmp="$STATE_DIR/status.json"
+  status_json >"$tmp"
+  now=$(grep -v -E '"(updated_at|last_sync)"' "$tmp" | cksum)   # 시각만 바뀐 건 변경으로 안 침
+  if [ "$now" = "$(cat "$STATE_DIR/status.pushed" 2>/dev/null)" ] && [ -z "$(find "$STATE_DIR/status.pushed" -mmin +180 2>/dev/null)" ]; then
+    return 0
+  fi
+  api="https://api.github.com/repos/$repo/contents/mac/status.json"
+  sha=$(curl -fsS -m 20 -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" "$api" 2>/dev/null \
+    | grep -o '"sha": *"[0-9a-f]*"' | head -n 1 | sed 's/.*"\([0-9a-f]*\)"$/\1/')
+  shaj=""; [ -n "$sha" ] && shaj=",\"sha\":\"$sha\""
+  body="{\"message\":\"mac: 상태 $(date '+%F %T')\",\"content\":\"$(base64 <"$tmp" | tr -d '\n')\"$shaj}"
+  if curl -fsS -m 30 -X PUT -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" -d "$body" "$api" >/dev/null 2>&1; then
+    printf '%s' "$now" >"$STATE_DIR/status.pushed"
+    clear_once status
+  else
+    log_once status "서버 상태를 GitHub(비공개 보고서 레포 mac/status.json)에 못 올렸어요 — .env 토큰 권한·인터넷 확인"
+  fi
+}
+
 # node 20+ (package.json engines). 없으면 이유를 돌려줌
 node_problem(){
   local v

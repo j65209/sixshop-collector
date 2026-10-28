@@ -6,3 +6,5 @@ RUN=npm run home-daily -- kop
 AT=07:20 21:00
 REQUIRES=SIXSHOP_EMAIL_KOP SIXSHOP_PASSWORD_KOP REPORTS_GITHUB_TOKEN
 TIMEOUT_MIN=30
+# RUN_NOW: 값을 바꿔 올리면 맥미니가 다음 확인 때(15분 안) 한 번 바로 실행 — 맥에 가지 않고 시험할 때
+RUN_NOW=2026-10-28 설치 후 첫 실행 확인

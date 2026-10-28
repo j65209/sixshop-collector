@@ -52,6 +52,22 @@ ensure_deps(){
   lock_release deps
 }
 
+# RUN_NOW=<아무 값>: 값이 바뀌면 그 작업을 한 번 바로 실행 — 맥에 가지 않고 GitHub 에서 값만 바꿔 시험 실행할 때
+run_now(){
+  local id=$1 f=$2 label=$3 v
+  v=$(job_get "$f" RUN_NOW)
+  [ -n "$v" ] || return 0
+  [ "$v" = "$(cat "$STATE_DIR/runnow-$id" 2>/dev/null)" ] && return 0
+  lc_loaded "$label" || return 0
+  lock_busy "run-$id" && return 0
+  printf '%s' "$v" >"$STATE_DIR/runnow-$id"
+  if launchctl kickstart "$GUI/$label" >/dev/null 2>&1; then
+    log "[$id] RUN_NOW=$v — 지금 한 번 실행"
+  else
+    log "[$id] RUN_NOW 실행 실패 (launchctl kickstart)"
+  fi
+}
+
 # mac/jobs/*.job 과 launchd 를 맞춤. 이 관리자가 깐 작업(managed.txt)만 내리고, 손으로 깐 다른 작업은 건드리지 않는다.
 sync_jobs(){
   local f id label plist tmp seen=" "
@@ -66,20 +82,23 @@ sync_jobs(){
     label="$LABEL_PREFIX$id"; plist="$AGENTS_DIR/$label.plist"
     tmp=$(mktemp "$STATE_DIR/plist.XXXXXX") || continue
     plist_for_job "$id" "$f" >"$tmp"
-    if is_managed "$id" && cmp -s "$tmp" "$plist" && lc_loaded "$label"; then rm -f "$tmp"; continue; fi
-    if lock_busy "run-$id"; then rm -f "$tmp"; continue; fi   # 실행 중이면 끝난 다음 확인 때 바꿈
-    if [ -f "$plist" ] && ! is_managed "$id"; then
-      cp "$plist" "$STATE_DIR/backup-$label.$(date +%Y%m%d%H%M%S).plist"
-      log "[$id] 손으로 깔아 둔 같은 이름 작업을 자동 관리로 넘겨받음 (원래 설정은 $STATE_DIR 에 백업)"
+    if ! { is_managed "$id" && cmp -s "$tmp" "$plist" && lc_loaded "$label"; }; then
+      if lock_busy "run-$id"; then rm -f "$tmp"; continue; fi   # 실행 중이면 끝난 다음 확인 때 바꿈
+      if [ -f "$plist" ] && ! is_managed "$id"; then
+        cp "$plist" "$STATE_DIR/backup-$label.$(date +%Y%m%d%H%M%S).plist"
+        log "[$id] 손으로 깔아 둔 같은 이름 작업을 자동 관리로 넘겨받음 (원래 설정은 $STATE_DIR 에 백업)"
+      fi
+      lc_unload "$label"
+      cat "$tmp" >"$plist"
+      if lc_load "$plist"; then
+        mark_managed "$id"
+        log "[$id] 설치: $(schedule_text "$f") — $(job_get "$f" DESC)"
+      else
+        log "[$id] 설치 실패 (launchctl bootstrap) — 다음 확인 때 다시"
+      fi
     fi
-    lc_unload "$label"
-    cat "$tmp" >"$plist"; rm -f "$tmp"
-    if lc_load "$plist"; then
-      mark_managed "$id"
-      log "[$id] 설치: $(schedule_text "$f") — $(job_get "$f" DESC)"
-    else
-      log "[$id] 설치 실패 (launchctl bootstrap) — 다음 확인 때 다시"
-    fi
+    rm -f "$tmp"
+    run_now "$id" "$f" "$label"
   done
   # 저장소에서 지워졌거나 ENABLED=0 인 작업 내리기
   for id in $(managed_list); do
@@ -123,6 +142,7 @@ cmd_sync(){
   if [ -n "$problem" ]; then log_once node "$problem — 작업이 실행되지 않아요"; else clear_once node; ensure_deps; fi
   sync_jobs
   printf 'at=%s\ncommit=%s\n' "$(date '+%F %T')" "$(git -C "$CLONE_DIR" rev-parse --short HEAD)" >"$STATE_DIR/last-sync.txt"
+  push_status
   return 0
 }
 
@@ -141,6 +161,8 @@ cmd_status(){
   p=$(node_problem); echo "  node        ${p:-$(node -v 2>/dev/null)}"
   if [ -f "$CLONE_DIR/.env" ]; then echo "  설정 파일   $CLONE_DIR/.env"
   else echo "  설정 파일   없음 — $CLONE_DIR/.env 를 만들어야 해요"; fi
+  if [ -f "$STATE_DIR/status.pushed" ]; then echo "  상태 보고   비공개 보고서 레포 mac/status.json"
+  else echo "  상태 보고   아직 안 올림 (.env 의 REPORTS_GITHUB_TOKEN 필요)"; fi
   echo
   echo "작업 (mac/jobs/*.job)"
   for f in "$CLONE_DIR"/mac/jobs/*.job; do

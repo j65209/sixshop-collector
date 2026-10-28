@@ -1,29 +1,16 @@
 #!/bin/bash
 # launchd(com.brightbeed.<작업id>)가 정해진 시각에 실행: run-job.sh <작업id>
 # 작업 내용(RUN · REQUIRES · TIMEOUT_MIN)은 실행할 때마다 mac/jobs/<작업id>.job 에서 다시 읽는다.
-# 결과: ~/Library/Logs/brightbeed-<작업id>.log 와 ~/brightbeed-auto/state/status-<작업id>.txt
-# 스크립트가 실행 중에 git 으로 바뀌어도 안전하도록 전부 main 안에 두고 마지막 줄에서 한 번에 실행한다.
+# 결과: ~/Library/Logs/brightbeed-<작업id>.log · ~/brightbeed-auto/state/status-<작업id>.txt · 비공개 보고서 레포 mac/status.json
+# 스크립트가 실행 중에 git 으로 바뀌어도 안전하도록 전부 함수 안에 두고 마지막 줄에서 한 번에 실행한다.
 
-main(){
-  . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
-  local id=${1:-} f logf missing run timeout pid wd rc start dur
-  valid_id "$id" || { echo "사용법: run-job.sh <작업id>"; return 2; }
-  f=$(job_file "$id"); logf=$(job_log "$id")
-  mkdir -p "$STATE_DIR" "$LOG_DIR"
-
-  if ! lock_acquire "run-$id"; then
-    log "[$id] 이미 실행 중 — 이번 실행은 건너뜀" >>"$logf"
-    return 0
-  fi
-  trap "lock_release 'run-$id'" EXIT   # 지금 값으로 펼쳐 둠 — 함수가 끝나면 지역변수 id 는 사라진다
-  trim_log "$logf"
-  exec >>"$logf" 2>&1
-
+# 실제 실행 — 종료 코드를 돌려줌 (잠금·로그·상태 보고는 main 에서)
+run_job(){
+  local id=$1 f=$2 missing run timeout pid wd rc start dur waited=0
   if [ ! -f "$f" ]; then log "[$id] 작업 정의가 없어요 ($f) — 저장소에서 지워진 작업"; return 0; fi
   if [ "$(job_get "$f" ENABLED)" = "0" ]; then log "[$id] 꺼진 작업 — 건너뜀"; return 0; fi
 
   # 자동 설치 관리자가 의존성(npm ci)을 까는 중이면 최대 15분 기다림
-  local waited=0
   while lock_busy deps && [ $waited -lt 900 ]; do sleep 10; waited=$((waited + 10)); done
   if [ ! -d "$CLONE_DIR/node_modules" ]; then
     log "[$id] 실패: 의존성이 아직 안 깔렸어요 — $MANAGER_LOG 확인"
@@ -59,6 +46,28 @@ main(){
     log "[$id] 실패: 종료 코드 $rc (${dur}초)"
     status_write "$id" fail "종료 코드 $rc"
   fi
+  return $rc
+}
+
+main(){
+  . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+  local id=${1:-} f logf rc
+  valid_id "$id" || { echo "사용법: run-job.sh <작업id>"; return 2; }
+  f=$(job_file "$id"); logf=$(job_log "$id")
+  mkdir -p "$STATE_DIR" "$LOG_DIR"
+
+  if ! lock_acquire "run-$id"; then
+    log "[$id] 이미 실행 중 — 이번 실행은 건너뜀" >>"$logf"
+    return 0
+  fi
+  trap "lock_release 'run-$id'" EXIT   # 지금 값으로 펼쳐 둠 — 함수가 끝나면 지역변수 id 는 사라진다
+  trim_log "$logf"
+  exec >>"$logf" 2>&1
+
+  run_job "$id" "$f"; rc=$?
+  lock_release "run-$id"
+  # 결과를 바로 상태 파일에 — 실패해도 작업 결과에는 영향 없음
+  ( cd "$CLONE_DIR" 2>/dev/null; push_status )
   return $rc
 }
 main "$@"; exit $?

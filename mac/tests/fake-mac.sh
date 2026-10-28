@@ -58,6 +58,20 @@ while [ $# -gt 0 ]; do case "$1" in -P) pp=$2; shift 2 ;; -*) sig=$1; shift ;; *
 for p in $(ps | awk -v pp="$pp" 'NR > 1 && $2 == pp {print $1}'); do kill "$sig" "$p" 2>/dev/null; done
 exit 0
 EOF
+fake curl <<'EOF'
+#!/bin/bash
+# GitHub contents API 흉내 — PUT 은 본문을 저장하고, GET 은 저장된 게 있으면 sha 를 돌려줌
+echo "curl $*" >>"$FAKE_LAUNCHD/curl.log"
+method=GET; data=""; url=""
+while [ $# -gt 0 ]; do case "$1" in -X) method=$2; shift 2 ;; -d) data=$2; shift 2 ;; -H|-m) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac; done
+store="$FAKE_LAUNCHD/gh-$(printf '%s' "$url" | sed 's#.*/contents/##; s#/#_#g')"
+if [ "$method" = PUT ]; then printf '%s' "$data" >"$store"; echo "PUT $url" >>"$FAKE_LAUNCHD/puts.log"; echo '{}'; exit 0; fi
+[ -f "$store" ] || exit 22
+echo '{"name": "status.json", "sha": "abc123"}'
+EOF
+# 가짜 GitHub 에 올라간 상태 파일 내용 (base64 풀어서)
+gh_status(){ sed 's/.*"content":"\([^"]*\)".*/\1/' "$FAKE_LAUNCHD/gh-mac_status.json" 2>/dev/null | base64 -d 2>/dev/null; }
+puts(){ grep -c "mac/status.json" "$FAKE_LAUNCHD/puts.log" 2>/dev/null || echo 0; }
 
 # ---------- 가짜 GitHub 저장소 = 지금 작업 폴더의 mac/ + package 파일 ----------
 mkdir -p "$T/src"
@@ -98,6 +112,14 @@ echo "2) 바뀐 게 없을 때"
 check "다시 깔지 않음" '! grep -q -E "bootstrap|npm ci" "$FAKE_LAUNCHD/calls.log"'
 check "조용함 (로그 없음)" '[ ! -s "$T/sync.log" ]'
 
+echo "2-1) 서버 상태 보고 (비공개 보고서 레포 mac/status.json)"
+check "상태 파일 올림" 'gh_status | grep -q "\"id\": \"ably-daily\"" && gh_status | grep -q "\"manager\": \"on\"" && gh_status | grep -q "\"deps\": \"ok\""'
+n=$(puts); sync
+check "바뀐 게 없으면 다시 안 올림" '[ "$(puts)" = "$n" ]'
+if [ -n "${BB_TEST_NODE:-}" ]; then
+  check "올린 상태 파일은 올바른 JSON" 'gh_status | "$BB_TEST_NODE" -e "JSON.parse(require(\"fs\").readFileSync(0, \"utf8\"))"'
+fi
+
 echo "3) GitHub 에서 시각 변경"
 edit 's/^AT=07:10$/AT=07:20/' "$T/src/mac/jobs/ably-daily.job"; push "시각 변경"; sync
 check "새 코드 받음" 'grep -q "코드 갱신" "$T/sync.log"'
@@ -123,6 +145,14 @@ check "꺼진 작업 내림" '[ ! -e "$FAKE_LAUNCHD/loaded/com.brightbeed.ably-d
 edit '/^ENABLED=0$/d' "$T/src/mac/jobs/ably-daily.job"; push "켜기"; sync
 check "다시 켜면 설치" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.ably-daily" ]'
 
+echo "6-1) RUN_NOW 로 원격 시험 실행"
+echo "RUN_NOW=t1" >>"$T/src/mac/jobs/ably-daily.job"; push "지금 실행 t1"; : >"$FAKE_LAUNCHD/kicks.log"; sync
+check "값이 생기면 한 번 실행" 'grep -q "kickstart com.brightbeed.ably-daily" "$FAKE_LAUNCHD/kicks.log" && grep -q "RUN_NOW=t1" "$T/sync.log"'
+: >"$FAKE_LAUNCHD/kicks.log"; sync
+check "같은 값이면 다시 안 함" '[ ! -s "$FAKE_LAUNCHD/kicks.log" ]'
+edit 's/^RUN_NOW=t1$/RUN_NOW=t2/' "$T/src/mac/jobs/ably-daily.job"; push "지금 실행 t2"; sync
+check "값을 바꾸면 또 한 번" 'grep -q "kickstart com.brightbeed.ably-daily" "$FAKE_LAUNCHD/kicks.log"'
+
 echo "7) 관리 스크립트가 바뀌면 새 버전으로 다시 실행"
 echo "# 변경 시험" >>"$T/src/mac/lib.sh"; push "lib 변경"; sync
 check "새 버전으로 재실행" 'grep -q "새 버전으로 다시 실행" "$T/sync.log"'
@@ -140,6 +170,7 @@ check "관계없는 fx-usd 는 그대로" 'grep -q "fx-usd" "$AG/com.brightbeed.
 echo "9) 작업 실행 (run-job.sh)"
 FAKE_JOB_RC=0 bash "$C/mac/run-job.sh" ably-daily
 check "성공 기록" 'grep -qx "result=ok" "$AH/state/status-ably-daily.txt"'
+check "끝나자마자 상태 파일에 결과" 'gh_status | grep -q "\"last_result\": \"ok\"" && gh_status | grep -q "\"running\": false"'
 check "로그에 시작 · 완료" 'grep -q "\[ably-daily\] 시작: npm run ably-daily" "$LG/brightbeed-ably-daily.log" && grep -q "\[ably-daily\] 완료" "$LG/brightbeed-ably-daily.log" && grep -q "fake run ably-daily" "$LG/brightbeed-ably-daily.log"'
 FAKE_JOB_RC=3 bash "$C/mac/run-job.sh" ably-daily
 check "실패 기록 (종료 코드 3)" 'grep -qx "detail=종료 코드 3" "$AH/state/status-ably-daily.txt"'
@@ -148,6 +179,10 @@ bash "$C/mac/run-job.sh" ably-daily
 check "설정값 없으면 실행 안 함" 'grep -qx "detail=설정값 없음: ABLY_PASSWORD" "$AH/state/status-ably-daily.txt"'
 echo "ABLY_PASSWORD=..." >>"$C/.env"; bash "$C/mac/run-job.sh" ably-daily
 check "예시값(...)도 없는 것으로" 'grep -qx "detail=설정값 없음: ABLY_PASSWORD" "$AH/state/status-ably-daily.txt"'
+cp "$T/env.bak" "$C/.env"
+grep -v "^REPORTS_GITHUB_TOKEN" "$T/env.bak" >"$C/.env"; n=$(puts)
+bash "$C/mac/run-job.sh" ably-daily
+check "토큰이 없으면 상태를 안 올림" '[ "$(puts)" = "$n" ]'
 cp "$T/env.bak" "$C/.env"
 FAKE_JOB_SLEEP=3 bash "$C/mac/run-job.sh" ably-daily & bg=$!
 sleep 1
