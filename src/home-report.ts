@@ -20,6 +20,10 @@ export interface HomeAd {
   /** 광고 전환 매출(원) */
   order_price: number | null;
   basis: string;
+  /** 광고 시트 입력 전이라 메타 광고 데이터로 추정한 값 (src/home-ad.ts) */
+  estimated?: boolean;
+  /** 광고 시트를 이번에 못 읽음(네트워크 · 5xx) — "아직 미입력"과 다름. 실시간 수집기는 이전 값을 그대로 둔다 */
+  unavailable?: boolean;
 }
 
 export interface HomeReportOptions {
@@ -34,6 +38,8 @@ export interface HomeReportOptions {
   costRows: CostRow[];
   /** 원가 찾기 — 없으면 matchCost(costRows, …). 아페티 · 코즈미는 옵션을 읽는 2판 (src/cost-match.ts) */
   costMatcher?: (goodsName: string, goodsCode: string, option: string) => CostMatch;
+  /** 원가 시트가 아직 없는 브랜드 — 원가를 0 으로 빼지 않고 "원가 미반영 보고서"로 (summary.cost = null) */
+  costUnavailable?: boolean;
   /** 보고서에 적을 원가 출처 설명 (브랜드마다 시트가 다름) */
   costBasis?: string;
   ad: HomeAd;
@@ -176,6 +182,7 @@ export function buildHomeReport(rows: XlsxRow[], o: HomeReportOptions) {
       paid_basis: "실결제 = 고객 결제 금액 (상품 + 고객이 낸 배송비, 부분 취소는 잔액). 네이버페이 주문형 포함",
       cost_basis: o.costBasis ?? "MD팀 코페리 시트 — 첫 탭(C·E · P·Q열) → Product List 탭 보충, 상품명·옵션으로 매칭",
       ad_basis: o.ad.basis,
+      ...(o.ad.estimated ? { ad_estimated: true } : {}),
       date_basis: "주문일",
       excluded_status: "취소·반품·환불(요청 포함) · 입금 대기 주문과 취소된 상품은 매출에서 제외",
       source: "식스샵 관리자 주문 엑셀",

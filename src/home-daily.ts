@@ -1,6 +1,6 @@
 /**
- * 공홈(식스샵) 일일 보고서 수집기 — 에이블리 일일 보고서(src/ably-daily.ts)와 같은 양식.
- * 맥미니 자동 설치 관리자가 실행 (mac/jobs/home-daily-<브랜드>.job). 오피스 전략팀 → 공홈 탭이 읽는다.
+ * 공홈(식스샵) 일일 보고서 수집기 — 에이블리 일일 보고서(src/ably-daily.ts)와 같은 양식. 오피스 전략팀 → 공홈 탭이 읽는다.
+ * 하루치를 손으로 만들 때 (받아 둔 프로 주문 JSON · 일반 식스샵 엑셀). 식스샵 프로 상점의 30분 자동 갱신은 src/home-live.ts.
  *
  * 사용법:
  *   npx tsx src/home-daily.ts kop                              # 어제(KST)
@@ -25,99 +25,13 @@ import "dotenv/config";
 import { readFileSync, writeFileSync } from "node:fs";
 import { read, utils } from "xlsx";
 import type { Brand } from "./brands.js";
-import { loadCostRows, loadCostTables, type CostTable, type CostRow } from "./ably-cost.js";
-import { costBook, matchCostV2, type CostBookOptions } from "./cost-match.js";
-import { buildHomeReport, coversWholeDay, type HomeAd, type XlsxRow } from "./home-report.js";
+import { loadAd } from "./home-ad.js";
+import { FEE_RATE, loadCostMatcher, HOME_BRANDS, NAVER_FEE_RATE, SHIPPING_COST, type HomeBrand } from "./home-brands.js";
+import { buildHomeReport, coversWholeDay, type XlsxRow } from "./home-report.js";
 import { buildProReport, proCoversDay, type ProOrder } from "./home-report-pro.js";
 import { REPORTS_REPO, writeDailyReport } from "./reports-repo.js";
 
-const OFFICE_RAW = "https://raw.githubusercontent.com/j65209/beaduniverse/main";
-// 결제수수료 추정 — 실제 요율 확인 전 가정값 (식스샵 자체 결제 · 네이버페이 주문형 따로)
-const FEE_RATE = Number(process.env.HOME_FEE_RATE ?? 0.035);
-const NAVER_FEE_RATE = Number(process.env.HOME_NAVERPAY_FEE_RATE ?? 0.035);
-const SHIPPING_COST = Number(process.env.HOME_SHIPPING_COST ?? 2200);
-
-// 공홈 보고서를 만드는 브랜드 — id 는 오피스 BRAND_SECTIONS 와 같게 (전략팀 공홈 카드가 home/{id} 를 읽음).
-// proStore: 식스샵 프로 상점 이름(store.sixshop.com/{proStore}) · cost: MD팀 구글시트의 원가 표
-interface HomeBrand {
-  name: string;
-  credEnvSuffix: string;
-  proStore: string;
-  costBasis: string;
-  loadCosts: () => Promise<CostRow[]>;
-  /** 있으면 옵션을 읽는 원가 매칭 2판(src/cost-match.ts) — 묶음 · 선택형 상품이 많은 브랜드 */
-  costMatch?: CostBookOptions;
-}
-// MD팀 구글시트(링크 공개)의 원가 표: 탭 gid · 상품명 열 · 원가(원) 열 (0부터 센 번호) · 머리글 줄 수. 앞 탭이 우선.
-interface SheetTab { gid: string; nameCol: number; costCol: number; skip: number }
-const sheetTables = (id: string, tabs: SheetTab[]): CostTable[] =>
-  tabs.map((t, i) => ({
-    url: `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&gid=${t.gid}`,
-    nameCol: t.nameCol, costCol: t.costCol, skip: t.skip, table: (["A", "B", "P"] as const)[Math.min(i, 2)],
-  }));
-// 아페티 · 코즈미 시트는 E열이 위안(￥), F열 "공급가"(원) = ￥ × 300 이 원가 (2026-10 전 행 확인)
-const APETI_SHEET = "1u6u15dxSUthAYKxqjYH8zLSdOAeWAiFtM24dVYZwOS0";
-const APETI_COSTS: SheetTab[] = [
-  { gid: "1838386820", nameCol: 2, costCol: 5, skip: 1 }, // Product List — 기준 표
-  { gid: "390277054", nameCol: 2, costCol: 5, skip: 1 }, // 공홈 가격 수정 표 — 공홈 SET 줄 · "(재등록)" 없는 이름 보충
-  { gid: "141680769", nameCol: 2, costCol: 5, skip: 1 }, // 플랫폼 세트 — con ring 등 보충 (ORION 값이 한 칸씩 밀려 있어 맨 뒤)
-];
-const KOZMI_SHEET = "1TS-HqffOap11AdGwiffMr38KwHAUq1fmcjmmBPdKLMU";
-const KOZMI_COSTS: SheetTab[] = [
-  { gid: "1819637012", nameCol: 2, costCol: 5, skip: 1 }, // Product List
-  { gid: "59467872", nameCol: 0, costCol: 1, skip: 1 }, // 50%할인이벤트 — A 상품명 · B 공급가 ("drop set" 보충)
-];
-// 아페티 공홈 옵션 · SET 표기 → 시트 이름 (2026-09 ~ 10 주문에 실제로 나온 표기). 새 표기가 나오면 보고서에 "미확인"으로 뜸
-const APETI_ALIASES: CostBookOptions["aliases"] = [
-  [/baby\s*-?\s*a\s*\+\s*b/i, "Baby ring-A + Baby ring-B"],
-  [/baby\s*-\s*a\b/i, "Baby ring-A"],
-  [/baby\s*-\s*b\b/i, "Baby ring-B"],
-  [/hide\s*\+\s*big\s*star\s*set/i, "hide star ring + BIG star ring"],
-  [/hide\s*star\s*\+\s*big\s*star\s*ring/i, "hide star ring + BIG star ring"],
-  [/big\s*star\s*\+\s*hide\s*star\s*ring/i, "BIG star ring + hide star ring"],
-  [/white\s*heart\s*\+\s*heart\s*ring\s*set/i, "White heart ring + heart ring"],
-  [/luna\s*\+\s*line\s*ring\s*set/i, "Luna line ring (Luna) + Luna line ring (Line)"],
-  [/^\s*line\s*ring\s*$/i, "Luna line ring (Line)"],
-  [/lily\s*\+\s*vine\s*ring\s*set/i, "Lily vine ring (lily) + Lily vine ring (vine)"],
-  [/^\s*vine\s*ring\s*$/i, "Lily vine ring (vine)"],
-  [/small\s*queen\s*\+\s*big\s*queen\s*ring/i, "Small queen ring + Big queen ring"],
-  [/^\s*queen\s*ring\s*set\s*$/i, "Small queen ring + Big queen ring"],
-  [/nova\s*star\s*set/i, "Nova star ring-A + Nova star ring-B"],
-  [/nova\s*star\s*-\s*([ab])/i, "Nova star ring-$1"],
-  [/^\s*orion\s*set\s*$/i, "ORION- A + ORION - B + ORION - C"],
-  [/^\s*oreo\s*set\s*$/i, "OREO - A + OREO - B"],
-  [/eo-a\s*oreo-b/i, "OREO - A + OREO - B"],
-  [/doraemi\s*-?\s*set/i, "DORAEMI 1 + DORAEMI 2 + DORAEMI 3"],
-  [/^\s*o\s*&\s*loof\s*necklace\s*$/i, "N - O & Loof"],
-  [/^\s*o\s*necklace\s*$/i, "N - O"],
-];
-// Bold ORION ring: "TYPE: White/Matt ORION ring" + "TYPE: A · B · C · A+B+C" 두 칸을 합쳐 시트 이름으로
-const apetiSpecial = (goodsName: string, option: string): string[] | null => {
-  if (!/bold\s*orion/i.test(goodsName)) return null;
-  const color = /matt/i.test(option) ? "Matt" : /white/i.test(option) ? "White" : null;
-  const one = option.match(/TYPE:\s*([ABC])\s*$/i)?.[1];
-  const letters = /a\s*\+\s*b\s*\+\s*c/i.test(option) ? ["A", "B", "C"] : one ? [one.toUpperCase()] : [];
-  return color && letters.length ? letters.map((l) => `${color} ORION - ${l}`) : null;
-};
-const HOME_BRANDS: Record<string, HomeBrand> = {
-  kop: {
-    name: "코페리", credEnvSuffix: "_KOP", proStore: "coferry",
-    costBasis: "MD팀 코페리 시트 — 첫 탭(C·E · P·Q열) → Product List 탭 보충, 상품명·옵션으로 매칭",
-    loadCosts: () => loadCostRows(),
-  },
-  apt: {
-    name: "아페티", credEnvSuffix: "_APT", proStore: "apeti",
-    costBasis: "MD팀 아페티 시트 — Product List → 공홈 가격 수정 표 → 플랫폼 세트 F열(공급가), 옵션에 고른 반지·목걸이까지 읽어 매칭",
-    loadCosts: () => loadCostTables(sheetTables(APETI_SHEET, APETI_COSTS)),
-    costMatch: { aliases: APETI_ALIASES, special: apetiSpecial },
-  },
-  koz: {
-    name: "코즈미", credEnvSuffix: "_KOZ", proStore: "cos-mi",
-    costBasis: "MD팀 코즈미 시트 — Product List F열(공급가) → 50%할인이벤트 B열 보충, 옵션에 고른 상품까지 읽어 매칭",
-    loadCosts: () => loadCostTables(sheetTables(KOZMI_SHEET, KOZMI_COSTS)),
-    costMatch: {},
-  },
-};
+// 브랜드 설정(원가 시트 · 식스샵 프로 상점) 은 src/home-brands.ts, 광고비는 src/home-ad.ts
 
 function yesterdayKst(): string {
   return new Date(Date.now() + 9 * 3600_000 - 24 * 3600_000).toISOString().slice(0, 10);
@@ -179,34 +93,6 @@ async function fetchRows(brandId: string, cfg: HomeBrand): Promise<XlsxRow[]> {
   }
 }
 
-/* ---------------- 광고비 (오피스 광고 시트 — 오피스 index.html _adshCalc 와 같은 계산) ---------------- */
-
-interface AdDay { krw?: number; usd?: number; rev?: number; revUsd?: number; fx?: number }
-
-async function fxRate(date: string): Promise<number | null> {
-  const r = await fetch(`${OFFICE_RAW}/data/fx-usd.json?_t=${Date.now()}`).catch(() => null);
-  if (!r?.ok) return null;
-  const rates = ((await r.json()) as { rates?: Record<string, { rate: number }> }).rates ?? {};
-  const days = Object.keys(rates).filter((d) => d <= date).sort();
-  return days.length ? rates[days[days.length - 1]].rate : null;
-}
-
-async function loadAd(brand: string, date: string): Promise<HomeAd> {
-  const basis = `오피스 광고 시트 (메타, data/ad-sheets/${brand}.json)`;
-  try {
-    const r = await fetch(`${OFFICE_RAW}/data/ad-sheets/${brand}.json?_t=${Date.now()}`);
-    if (!r.ok) return { spend: null, order_price: null, basis: `${basis} — 못 읽음 (HTTP ${r.status})` };
-    const day = ((await r.json()) as { days?: Record<string, AdDay> }).days?.[date];
-    if (!day) return { spend: null, order_price: null, basis: `${basis} — ${date} 광고비 미입력` };
-    const rate = day.fx ?? (day.usd != null || day.revUsd != null ? await fxRate(date) : null);
-    const spend = day.krw ?? (day.usd != null && rate ? day.usd * rate : null);
-    const orderPrice = day.rev ?? (day.revUsd != null && rate ? day.revUsd * rate : null);
-    return { spend, order_price: orderPrice, basis: spend == null ? `${basis} — ${date} 광고비 미입력` : basis };
-  } catch (e) {
-    return { spend: null, order_price: null, basis: `${basis} — 못 읽음 (${(e as Error).message})` };
-  }
-}
-
 /* ---------------- main ---------------- */
 
 async function main(): Promise<void> {
@@ -230,12 +116,10 @@ async function main(): Promise<void> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`날짜 형식은 YYYY-MM-DD: ${date}`);
   const offline = xlsxPaths.length > 0 || proPaths.length > 0;
 
-  const [costRows, ad] = await Promise.all([cfg.loadCosts(), loadAd(brandId, date)]);
-  const book = cfg.costMatch ? costBook(costRows, cfg.costMatch) : null;
+  const [{ rows: costRows, matcher: costMatcher }, ad] = await Promise.all([loadCostMatcher(cfg), loadAd(brandId, date)]);
   const opts = {
     date, brand: brandId, market: cfg.name, feeRate: FEE_RATE, naverFeeRate: NAVER_FEE_RATE, shippingCost: SHIPPING_COST,
-    costRows, costBasis: cfg.costBasis, ad,
-    costMatcher: book ? (name: string, code: string, option: string) => matchCostV2(book, name, code, option) : undefined,
+    costRows, costBasis: cfg.costBasis, ad, costMatcher, costUnavailable: cfg.noCostSheet,
   };
   let report;
   if (proPaths.length) {
@@ -253,7 +137,7 @@ async function main(): Promise<void> {
   const s = report.summary;
   const won = (n: number) => n.toLocaleString("ko-KR");
   console.log(
-    `[home-daily] ${cfg.name} ${date} 주문 ${s.orders}(네이버페이 ${s.naverpay_orders}) · 실결제 ${won(s.paid)} (배송비 수입 ${won(s.shipping_income)}) · 광고비 ${won(s.ad_spend)} · 원가 ${won(s.cost)} · 순이익 ${won(s.net)} · 원가 미확인 ${s.cost_missing_items}건`,
+    `[home-daily] ${cfg.name} ${date} 주문 ${s.orders}(네이버페이 ${s.naverpay_orders}) · 실결제 ${won(s.paid)} (배송비 수입 ${won(s.shipping_income)}) · 광고비 ${won(s.ad_spend)} · 원가 ${s.cost == null ? "미반영" : won(s.cost)} · 순이익 ${won(s.net)} · 원가 미확인 ${s.cost_missing_items}건`,
   );
   if ("missing_columns" in report.assumptions && report.assumptions.missing_columns) {
     console.warn(`[home-daily] 엑셀에 없는 열: ${report.assumptions.missing_columns.join(", ")} — 식스샵 엑셀 양식이 바뀌었는지 확인`);

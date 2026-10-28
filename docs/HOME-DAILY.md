@@ -1,16 +1,52 @@
 # 공홈(식스샵) 일일 보고서
 
 에이블리 일일 보고서(`docs/ABLY-API.md`)와 **같은 양식**으로 공홈 하루 손익을 만든다. 오피스 **전략팀 → 공홈 탭**이 읽는다.
-브랜드는 `src/home-daily.ts` 의 `HOME_BRANDS` — 코페리(kop) · 아페티(apt) · 코즈미(koz). 원가는 브랜드마다 MD팀 구글시트.
+브랜드는 `src/home-brands.ts` 의 `HOME_BRANDS` — 코페리(kop) · 아페티(apt) · 코즈미(koz) · 프로덕트피알(pp) · 아코이하우스(akoi) · 클리어타입(ct). 원가는 브랜드마다 다름 (아래).
 
-> **2026-10 코페리 · 아페티 · 코즈미는 식스샵 프로로 옮김** → 아래 "식스샵 프로" 절. 일반 식스샵 엑셀 수집(아래 "실행")은
-> 옮기기 전 기간을 채울 때만 쓴다. 맥미니 `home-daily-kop.job` 은 프로 실시간 수집이 생길 때까지 꺼 둠(`ENABLED=0`).
+> **2026-10 코페리 · 아페티 · 코즈미는 식스샵 프로로 옮김** (프로덕트피알 · 아코이하우스 · 클리어타입은 원래 프로) → 아래 "실시간 (30분마다)" · "식스샵 프로" 절.
+> 일반 식스샵 엑셀 수집(아래 "실행")은 옮기기 전 기간을 채울 때만 쓴다.
+
+## 실시간 (30분마다) — `src/home-live.ts`
+
+맥미니 `mac/jobs/home-live.job` 이 **30분마다** 실행. 식스샵 프로에 로그인(`src/sixshop-pro.ts`)해서 여섯 상점 주문을 받고
+**오늘(진행 중) · 어제** 보고서를 다시 계산해, 바뀐 것만 brightbeed-reports 에 **커밋 하나로** 올린다 (`commitFiles`, Git Data API).
+06시 이후 첫 실행은 **지난 8일**을 다시 계산 — 늦은 취소 · 환불, 주말에 밀린 광고 시트 입력 (상태 `~/brightbeed-auto/state/home-live.json`).
+
+```bash
+npm run home-live                      # 오늘 · 어제 (+ 그날 첫 06시 이후 실행이면 지난 8일)
+npm run home-live -- --days 8 --dry    # 지난 8일 계산만 (기록 · 상태 파일 없음)
+npm run home-live -- --brands kop      # 일부 브랜드만
+```
+
+- 오늘 보고서에는 `as_of`(계산 시각 HH:MM, KST) · `assumptions.partial_day` — index.json 줄에도 `as_of`. 오피스는 카드에 "오늘 HH:MM 기준" · LIVE,
+  제목에 "● 진행 중"을 띄우고, 켜 둔 화면을 10분마다 다시 불러온다. 숫자가 그대로면 안 올리지만 55분이 지나면 시각을 새로 올림.
+- 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 — 그 전은 프로 데이터에 네이버페이 주문형이 없어서 (코페리 10-20 · 아페티 10-22 · 코즈미 09-03).
+- 광고비 (`src/home-ad.ts`): 광고 시트 값이 있으면 그것, 아직 없으면 **메타 광고 데이터**(`beaduniverse/data/meta-ads/{브랜드}.json`, 맥미니가 약 1시간마다 갱신)의
+  오늘 · 어제 광고비 × 그날 환율로 **추정** (`assumptions.ad_estimated`, 오피스 "메타 기준 추정"). 광고 시트 krw 도 메타 달러 × 환율이라 같은 계산.
+- env (맥미니 `.env`): `SIXSHOP_PRO_EMAIL` · `SIXSHOP_PRO_PASSWORD` (상점이 다 보이는 식스샵 프로 **소유자** 계정 — 직원 계정이면 `SIXSHOP_PRO_LOGIN_TYPE=user`) · `REPORTS_GITHUB_TOKEN`.
+- 시험 (네트워크 · 계정 없이): `npx tsx tests/home-live.test.ts` · `npx tsx tests/sixshop-pro.test.ts`
+
+### 식스샵 프로 로그인 (`src/sixshop-pro.ts`, 브라우저 없이 HTTP)
+
+관리자 앱 코드 분석 + 2026-10-28 로그인된 화면에서 확인 (값은 보지 않고 비교만):
+
+1. `POST https://storemanager-be.sixshop.io/v1/api/account/sign-in` `{accountId: 이메일, password}` → `{code, data: {selltore: {userToken, ownerId, currentStore, stores}}}`.
+   실패는 `{statusCode: 400, code: "SM-LOGIN-007", message}`.
+2. 상점마다 `POST /v1/api/owner/auth/store` `{storeName}` (1의 토큰으로 만든 헤더 7개) → `data.userToken` = 그 상점 토큰.
+   토큰(JWT, 약 30일)은 **상점에 묶여 있다** — 헤더의 상점 이름만 바꾸면 400. 전환해도 다른 토큰(사람이 쓰는 브라우저)은 그대로 유효.
+3. 주문 API 헤더: `Authorization: Bearer <토큰>` · `x-sixshop-metadata-usertoken` · `ss-user-token` = 토큰, `x-sixshop-metadata-storeid` · `ss-store-id` = 상점 이름,
+   `x-sixshop-metadata-userId` · `ss-user-id` = ownerId.
+
+상점 토큰은 맥미니 `~/brightbeed-auto/state/sixshop-pro-tokens.json`(권한 600)에 두고 만료 하루 전까지 다시 로그인하지 않는다 (만료를 모르면 7일).
+.env 계정이 바뀌면 그 토큰은 버린다. 토큰이 안 먹으면(400 · 401 · 403) 한 번만 새로 받고, 새 토큰도 거절되면 6시간 동안 다시 받지 않는다.
+**로그인이 실패하면 같은 비밀번호로는 6시간 동안 다시 시도하지 않는다** (30분마다 틀린 비밀번호로 로그인하지 않게) — .env 를 고치면 바로 다시 시도.
+`--dry` 는 토큰 파일을 쓰지 않는다.
 
 ## 식스샵 프로
 
 관리자(`store.sixshop.com/{상점}`) 주문 목록 API `storemanager-be.sixshop.io/call/order-integration/v2/orders`
-(`page` · `limit=100` · `sort=-orderedAt` · `orderedAtMin/Max` UTC ISO) 응답을 **개인정보 없이 줄인 JSON** 으로 받아 계산한다 (`src/home-report-pro.ts`).
-로그인 토큰은 관리자 화면 요청 헤더에만 있다 — 파일·레포 어디에도 남기지 않는다. 지금은 관리자에 로그인한 브라우저에서 받아 둔 파일로 만든다.
+(`page` · `limit=100` · `sort=-orderedAt` · `orderedAtMin/Max` UTC ISO) 응답을 **개인정보 없이 줄인 JSON** 으로 받아 계산한다
+(`src/sixshop-pro-orders.ts` slimOrder → `src/home-report-pro.ts`). 실시간 수집기는 위 로그인으로 직접 받고, 손으로 만들 땐 받아 둔 파일(`--pro-json`)로.
 
 ```bash
 npx tsx src/home-daily.ts kop 2026-10-27 --pro-json kop-orders.json --out r.json   # 계산만 (기록 없음)
@@ -42,7 +78,7 @@ discountAmount, totalDiscountAmount, refundAmount, types, items:[{poid, name, op
 
 ## 실행 (일반 식스샵 — 옮기기 전 기간)
 
-맥미니 자동 설치 관리자가 `mac/jobs/home-daily-kop.job` 대로 **매일 07:20 · 21:00** 실행했다 (지금은 꺼 둠 — 위 참고. 둘 다 어제분, 밤 실행은 낮에 들어온 광고비·늦은 취소 반영).
+예전엔 맥미니 `home-daily-kop.job` 이 매일 07:20 · 21:00 실행했다 — 2026-10-28 삭제 (프로 상점은 위 `home-live` 가 맡음). 지금은 손으로만.
 
 ```bash
 npm run home-daily -- kop                                    # 어제
@@ -80,6 +116,19 @@ env (맥미니 `~/brightbeed-auto/sixshop-collector/.env`): `SIXSHOP_EMAIL_KOP` 
 
 MD팀 확인할 것: 아페티 플랫폼 세트 탭 White/Matt ORION 값이 한 칸씩 밀림(Product List 값을 씀) · con ring 은 플랫폼 세트에만 900원 · tid ring 0원.
 코즈미 Product List ↔ 발주 리스트 위안이 다른 5개(Seastar · Green Orb · White Pearl · Candy · Pearl beads 블랙 — 행이 밀려 복사된 듯).
+
+## 프로덕트피알 · 아코이하우스 · 클리어타입 원가 (2026-10-28 추가)
+
+셋 다 MD팀 시트가 없다. `src/home-brands.ts` 에 브랜드마다 따로:
+
+| 브랜드 | 원가 출처 | 매칭 | 2026-08~10 주문 기준 |
+|---|---|---|---|
+| 아코이하우스 | 오피스 아코이 기획전 계산기 `beaduniverse/data/promo-akoi.json` (= 룩북 시트 "생산 단가" 원) Butter Cloud 3,800 · Cozy Terry 4,300 · Mallow EVA 4,600 | 1판 matchCost, **`[1+1]` 상품은 원가 × 2** (`unitsPerLine`) | 571개 전부 |
+| 클리어타입 | "발주 리스트" 시트(1enza…, 사장님 마스터 상품 리스트) · 클리어타입 제품 리스트 탭 E열 **1688 단가(위안) × `HOME_CNY_KRW`(300)** | 공홈 이름에서 따옴표 · `925 Open Ring` · `Necklace` 를 떼고 시트 C열과 그대로 (`ctSpecial`) | 2,115개 중 1,294개. `"4s"` 반지(732) · GAO · HALIFAX · 도시 이름 목걸이는 시트에 없어 미확인 |
+| 프로덕트피알 | 같은 시트 · 프로덕트피알 제품 리스트 탭 (C열 한글 내부명 · D열 옵션 · E열 위안, 색상 줄은 위 값 이어 씀) | 공홈 상품 → 시트 행 대응표 `PP_MAP` (180° 케이블은 기종 C-C/U-C/U-8 별 단가) | 607개 중 확인 477 · 기본값(추정 대응) 61 · 미확인 69 (Jacquard 케이블 등 시트에 없음) |
+
+위안 × 300 은 아페티 · 코즈미 MD팀 시트(공급가 = ￥ × 300)와 같은 가정 — 구매대행 실제 입금은 ￥ × 약 245~250 (국제배송 · 통관 빼고).
+확인할 것: 배수 · `"4s"` 반지 원가 · 4 in 1 케이블이 기존/신규 포인원 중 어느 것인지 · 시트에 없는 상품 원가 (보고서에 "미확인"으로 뜸).
 
 ## 식스샵 주문 엑셀 규칙 (2026-10 코페리 실제 파일로 확인)
 

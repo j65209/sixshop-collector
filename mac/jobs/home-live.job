@@ -1,0 +1,10 @@
+# 공홈(식스샵 프로) 실시간 보고서 — 코페리 · 아페티 · 코즈미 · 프로덕트피알 · 아코이하우스 · 클리어타입의 오늘(진행 중) · 어제 보고서를 30분마다 다시 계산해
+# 바뀐 것만 비공개 레포 brightbeed-reports/home/{브랜드}/ 에 올림. 06시 이후 첫 실행은 지난 8일을 다시 계산 (늦은 취소 · 주말 광고 시트 입력).
+# 오피스 전략팀 → 공홈 탭이 읽는다. 계산 · 규칙은 docs/HOME-DAILY.md (src/home-live.ts)
+DESC=공홈 실시간 보고서 (식스샵 프로 6개 상점)
+RUN=npm run home-live
+EVERY_MIN=30
+REQUIRES=SIXSHOP_PRO_EMAIL SIXSHOP_PRO_PASSWORD REPORTS_GITHUB_TOKEN
+TIMEOUT_MIN=20
+# RUN_NOW: 값을 바꿔 올리면 맥미니가 다음 확인 때(15분 안) 한 번 바로 실행 — 맥에 가지 않고 시험할 때
+RUN_NOW=2026-10-28 첫 실행

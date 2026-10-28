@@ -50,9 +50,12 @@ const GENERIC = /^(set|11.*)$/;
 const norm = (s: string) => s.toLowerCase().replace(/[^0-9a-z가-힣]/g, "");
 const clean = (s: string) => s.replace(/\(재등록\)/g, "").trim();
 
-/** 단어로 나눔 — 숫자 범위 "2-6" 은 "~2-6", "Necklace-블랙" 은 한글 앞에서 나눠 black */
+/** 단어로 나눔 — 숫자 범위 "2-6" 은 "~2-6", "Necklace-블랙" 은 한글 앞에서 나눠 black, 라틴 악센트는 뗌(Primošten = primosten) */
 export function costWords(s: string): string[] {
   return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .normalize("NFC") // 한글은 다시 합침 (NFD 로 풀린 자모를 그대로 두면 아래 norm 이 지워 버림)
     .toLowerCase()
     .replace(/[()\[\]/,&+|:]/g, " ")
     .split(/\s+/)

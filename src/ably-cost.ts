@@ -145,6 +145,8 @@ export interface CostTable {
   /** 머리글 줄 수 */
   skip: number;
   table: CostRow["table"];
+  /** 원가 열이 원이 아닐 때 곱할 값 (예: 위안 단가 × 300) */
+  multiplier?: number;
 }
 
 /** 표를 차례로 읽어 합침 — 같은 이름은 앞 표 값을 씀 */
@@ -154,13 +156,13 @@ export async function loadCostTables(tables: CostTable[]): Promise<CostRow[]> {
     const part = parseCsv(await fetchCsv(t.url))
       .slice(t.skip)
       .filter((r) => r[t.nameCol]?.trim() && won(r[t.costCol]) > 0)
-      .map((r) => ({ name: r[t.nameCol].trim(), cost: won(r[t.costCol]), table: t.table }));
+      .map((r) => ({ name: r[t.nameCol].trim(), cost: Math.round(won(r[t.costCol]) * (t.multiplier ?? 1)), table: t.table }));
     rows = withSupplement(rows, part);
   }
   return rows;
 }
 
-async function fetchCsv(url: string): Promise<string> {
+export async function fetchCsv(url: string): Promise<string> {
   const r = await fetch(`${url}&_t=${Date.now()}`);
   if (!r.ok) throw new Error(`원가 시트 ${r.status}`);
   return r.text();
@@ -169,11 +171,14 @@ async function fetchCsv(url: string): Promise<string> {
 export async function loadCostRows(
   url = process.env.ABLY_COST_SHEET_CSV ?? DEFAULT_COST_SHEET_CSV,
   productListUrl = process.env.COST_PRODUCT_LIST_CSV ?? PRODUCT_LIST_CSV,
+  /** 보충 탭을 못 읽으면 실패 — 공홈 실시간 수집기는 지난 보고서를 "원가 미확인"으로 덮지 않게 */
+  strict = false,
 ): Promise<CostRow[]> {
   const main = costRowsFromCsv(await fetchCsv(url));
   if (!productListUrl) return main;
-  // 보충 탭을 못 읽어도 첫 탭만으로 보고서는 만든다
+  // (에이블리 보고서는) 보충 탭을 못 읽어도 첫 탭만으로 보고서는 만든다
   const extra = await fetchCsv(productListUrl).then(productListRowsFromCsv).catch((e: Error) => {
+    if (strict) throw new Error(`원가 Product List 탭을 못 읽음: ${e.message}`);
     console.warn(`[원가] Product List 탭을 못 읽어 첫 탭만 씀: ${e.message}`);
     return [] as CostRow[];
   });

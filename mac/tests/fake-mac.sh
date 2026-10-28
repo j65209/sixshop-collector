@@ -86,8 +86,8 @@ ABLY_EMAIL=me@example.co.kr
 ABLY_PASSWORD=pw
 ABLY_AD_MARKET_SNO=46903   # 코페리
 REPORTS_GITHUB_TOKEN=ghp_test
-SIXSHOP_EMAIL_KOP=kop@example.co.kr
-SIXSHOP_PASSWORD_KOP=pw
+SIXSHOP_PRO_EMAIL=pro@example.co.kr
+SIXSHOP_PRO_PASSWORD=pw
 GOOGLE_SERVICE_ACCOUNT_PATH=./keys/sa.json
 EOF
 echo '{}' >"$HOME/projects/sixshop-collector/keys/sa.json"
@@ -103,7 +103,7 @@ check "ably-daily 실행 경로" 'grep -q "<string>$C/mac/run-job.sh</string><st
 check "ably-daily launchd 등록" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.ably-daily" ]'
 check "관리자 15분마다 + 켤 때" 'grep -q "<integer>900</integer>" "$AG/com.brightbeed.autoupdate.plist" && grep -q "RunAtLoad" "$AG/com.brightbeed.autoupdate.plist" && [ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.autoupdate" ]'
 check "자동 관리 목록" 'grep -qx ably-daily "$AH/state/managed.txt"'
-check "꺼 둔 코페리 공홈 작업(ENABLED=0)은 설치 안 함" '[ ! -e "$FAKE_LAUNCHD/loaded/com.brightbeed.home-daily-kop" ] && [ ! -f "$AG/com.brightbeed.home-daily-kop.plist" ]'
+check "공홈 실시간 작업 30분마다" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.home-live" ] && grep -q "<key>StartInterval</key><integer>1800</integer>" "$AG/com.brightbeed.home-live.plist"'
 check "설치 끝 안내" 'printf "%s" "$out" | grep -q "끝. 이제 GitHub"'
 check "다 채워져 있으면 남은 일 없음" '! printf "%s" "$out" | grep -q "남은 일"'
 
@@ -171,6 +171,8 @@ echo "9) 작업 실행 (run-job.sh)"
 FAKE_JOB_RC=0 bash "$C/mac/run-job.sh" ably-daily
 check "성공 기록" 'grep -qx "result=ok" "$AH/state/status-ably-daily.txt"'
 check "끝나자마자 상태 파일에 결과" 'gh_status | grep -q "\"last_result\": \"ok\"" && gh_status | grep -q "\"running\": false"'
+n=$(puts); sleep 1; FAKE_JOB_RC=0 bash "$C/mac/run-job.sh" ably-daily
+check "또 성공이면 상태를 다시 안 올림 (30분 작업이 커밋을 쌓지 않게)" '[ "$(puts)" = "$n" ]'
 check "로그에 시작 · 완료" 'grep -q "\[ably-daily\] 시작: npm run ably-daily" "$LG/brightbeed-ably-daily.log" && grep -q "\[ably-daily\] 완료" "$LG/brightbeed-ably-daily.log" && grep -q "fake run ably-daily" "$LG/brightbeed-ably-daily.log"'
 FAKE_JOB_RC=3 bash "$C/mac/run-job.sh" ably-daily
 check "실패 기록 (종료 코드 3)" 'grep -qx "detail=종료 코드 3" "$AH/state/status-ably-daily.txt"'

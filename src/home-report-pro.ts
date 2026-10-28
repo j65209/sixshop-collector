@@ -80,7 +80,9 @@ export function buildProReport(all: ProOrder[], o: HomeReportOptions) {
   function itemRow(x: ProOrder, it: ProItem, excluded: boolean) {
     const option = (it.optDisplay || (it.optValues ?? []).join(" / ") || "").trim();
     const code = (it.sku || it.pcode || "").trim();
-    const cm = o.costMatcher ? o.costMatcher(it.name, code, option) : matchCost(o.costRows, it.name, code, option);
+    const cm = o.costUnavailable
+      ? { cost_unit: null, cost_name: null, cost_match: null }
+      : o.costMatcher ? o.costMatcher(it.name, code, option) : matchCost(o.costRows, it.name, code, option);
     const ea = n(it.qty);
     const paid = n(it.unitPrice) * ea;
     return {
@@ -178,6 +180,7 @@ export function buildProReport(all: ProOrder[], o: HomeReportOptions) {
         + " 오피스 실시간 매출과 달리 진행 중인 취소·반품 요청·보류 상품은 미리 뺌",
       cost_basis: o.costBasis ?? "MD팀 원가 시트 — 상품명·옵션으로 매칭",
       ad_basis: o.ad.basis,
+      ...(o.ad.estimated ? { ad_estimated: true } : {}),
       date_basis: "결제일 (KST)",
       excluded_status: "취소·전액 환불·입금 전 주문과 취소·환불·반품(요청·보류 포함)된 상품은 매출에서 제외",
       source: "식스샵 프로 관리자 주문",
@@ -200,7 +203,7 @@ export function buildProReport(all: ProOrder[], o: HomeReportOptions) {
       shipping,
       ad_spend: adSpend,
       ad_order_price: Math.round(o.ad.order_price ?? 0),
-      cost: sum.cost,
+      cost: o.costUnavailable ? null : sum.cost,
       cost_missing_items: sum.costMissing,
       cost_base_items: sum.costBase,
       net,

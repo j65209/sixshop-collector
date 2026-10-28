@@ -269,7 +269,8 @@ push_status(){
   repo=$(env_value REPORTS_REPO); repo=${repo:-j65209/brightbeed-reports}
   tmp="$STATE_DIR/status.json"
   status_json >"$tmp"
-  now=$(grep -v -E '"(updated_at|last_sync)"' "$tmp" | cksum)   # 시각만 바뀐 건 변경으로 안 침
+  # 시각만 바뀐 건 변경으로 안 침 — 작업이 또 성공한 것(마지막 실행 시각 · "완료 N초") · 실행 중 여부도. 30분마다 도는 작업이 커밋을 쌓지 않게
+  now=$(grep -v -E '"(updated_at|last_sync)"' "$tmp" | sed -e 's/"last_at": "[^"]*"/"last_at": ""/' -e 's/"last_detail": "완료 [0-9]*초"/"last_detail": "완료"/' -e 's/"running": [a-z]*/"running": false/' | cksum)
   if [ "$now" = "$(cat "$STATE_DIR/status.pushed" 2>/dev/null)" ] && [ -z "$(find "$STATE_DIR/status.pushed" -mmin +180 2>/dev/null)" ]; then
     return 0
   fi
