@@ -137,6 +137,29 @@ export function withSupplement(main: CostRow[], extra: CostRow[]): CostRow[] {
   ];
 }
 
+/** 다른 브랜드 원가 표 (상품명 열 · 원가 열이 정해진 시트 탭) */
+export interface CostTable {
+  url: string;
+  nameCol: number;
+  costCol: number;
+  /** 머리글 줄 수 */
+  skip: number;
+  table: CostRow["table"];
+}
+
+/** 표를 차례로 읽어 합침 — 같은 이름은 앞 표 값을 씀 */
+export async function loadCostTables(tables: CostTable[]): Promise<CostRow[]> {
+  let rows: CostRow[] = [];
+  for (const t of tables) {
+    const part = parseCsv(await fetchCsv(t.url))
+      .slice(t.skip)
+      .filter((r) => r[t.nameCol]?.trim() && won(r[t.costCol]) > 0)
+      .map((r) => ({ name: r[t.nameCol].trim(), cost: won(r[t.costCol]), table: t.table }));
+    rows = withSupplement(rows, part);
+  }
+  return rows;
+}
+
 async function fetchCsv(url: string): Promise<string> {
   const r = await fetch(`${url}&_t=${Date.now()}`);
   if (!r.ok) throw new Error(`원가 시트 ${r.status}`);

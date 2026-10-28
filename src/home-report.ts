@@ -10,7 +10,7 @@
  *   · 날짜는 "주문 일자"(YYYY-MM-DD HH:mm:ss)뿐 — 결제일 열은 없다. 가상 계좌는 입금 전 "입금 대기"
  * 구매자 이름·연락처·주소·메모 열은 읽지 않는다.
  */
-import { matchCost, type CostRow } from "./ably-cost.js";
+import { matchCost, type CostMatch, type CostRow } from "./ably-cost.js";
 
 export type XlsxRow = Record<string, unknown>;
 
@@ -32,6 +32,10 @@ export interface HomeReportOptions {
   naverFeeRate: number;
   shippingCost: number;
   costRows: CostRow[];
+  /** 원가 찾기 — 없으면 matchCost(costRows, …). 아페티 · 코즈미는 옵션을 읽는 2판 (src/cost-match.ts) */
+  costMatcher?: (goodsName: string, goodsCode: string, option: string) => CostMatch;
+  /** 보고서에 적을 원가 출처 설명 (브랜드마다 시트가 다름) */
+  costBasis?: string;
   ad: HomeAd;
 }
 
@@ -170,7 +174,7 @@ export function buildHomeReport(rows: XlsxRow[], o: HomeReportOptions) {
       fee_basis: `실결제의 ${rateText} 가정`,
       fee_note: `결제수수료는 실결제의 ${rateText}로 가정한 추정값이에요 (실제 요율 반영 전).`,
       paid_basis: "실결제 = 고객 결제 금액 (상품 + 고객이 낸 배송비, 부분 취소는 잔액). 네이버페이 주문형 포함",
-      cost_basis: "MD팀 코페리 시트 — 첫 탭(C·E · P·Q열) → Product List 탭 보충, 상품명·옵션으로 매칭",
+      cost_basis: o.costBasis ?? "MD팀 코페리 시트 — 첫 탭(C·E · P·Q열) → Product List 탭 보충, 상품명·옵션으로 매칭",
       ad_basis: o.ad.basis,
       date_basis: "주문일",
       excluded_status: "취소·반품·환불(요청 포함) · 입금 대기 주문과 취소된 상품은 매출에서 제외",
