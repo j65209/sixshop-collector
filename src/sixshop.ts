@@ -66,7 +66,11 @@ export async function loginAsBrand(page: Page, brand: Brand): Promise<void> {
   }
 }
 
-export async function fetchOrdersForBrand(page: Page, brand: Brand): Promise<OrderItem[]> {
+/**
+ * 주문 엑셀(상품별로 행 나누기)을 받아 행 목록으로.
+ * paidOnly(기본 true): "결제 완료" 상태만 — ERP 재고 차감용. false 면 상태 전체(공홈 일일 보고서용, 최근 주문부터).
+ */
+export async function fetchOrdersForBrand(page: Page, brand: Brand, opts: { paidOnly?: boolean } = {}): Promise<OrderItem[]> {
   // 식스샵 다운로드는 다이얼로그 timing/세션 등 이유로 자주 flaky → 5회 retry + exponential backoff
   // 매 retry마다 page를 fresh state로 reset (orders URL 재방문)
   const maxAttempts = 5;
@@ -75,7 +79,7 @@ export async function fetchOrdersForBrand(page: Page, brand: Brand): Promise<Ord
     try {
       await page.goto(ORDERS_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForTimeout(2500);
-      await applyPaidFilter(page);
+      if (opts.paidOnly !== false) await applyPaidFilter(page);
 
       const xlsxPath = await downloadOrdersXlsx(page, brand);
       const orders = parseXlsx(xlsxPath);

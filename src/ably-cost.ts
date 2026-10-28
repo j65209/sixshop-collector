@@ -1,9 +1,12 @@
 /**
- * 에이블리 주문 → 원가 매칭.
+ * 주문 → 원가 매칭 (에이블리 일일 보고서 · 공홈 일일 보고서 공용).
  *
- * 원가 시트(오피스 기획전 계산기와 같은 시트, 링크 공개 gviz CSV):
- *   A표 C열 상품명 · E열 원가(원)  ← 우선
- *   B표 P열 상품명 · Q열 원가(원)  ← A표에 없는 이름만 보충
+ * 원가 시트 = 오피스 MD팀 "코페리" 구글시트 (기획전 계산기와 같은 파일, 링크 공개 gviz CSV):
+ *   첫 탭(기획전 플랫폼 리스트) A표 C열 상품명 · E열 원가(원)  ← 우선
+ *   첫 탭 B표 P열 상품명 · Q열 원가(원)                       ← A표에 없는 이름만 보충
+ *   "Product List" 탭 C열 상품명 · E열 원가(원)               ← 위 두 표에 없는 이름만 보충
+ *     (2026-10-28 기준 Bunny bag · Stella keyring · Mori dot bag mint/white 등 9개가 여기에만 있음.
+ *      두 탭 값이 다른 5개 — ROUD bag · Staring backpack · stud belt · Vinta bag · SH star bag — 는 첫 탭 값을 씀)
  *
  * 에이블리 상품명은 "❤️‍🔥유사품주의! 리버시블 보부상 가방!❤️‍🔥cobaltiny bag 노트북…" 처럼 길어서
  * 시트 상품명의 앞 두 단어(제품 키)가 에이블리 상품명에 들어 있는 행만 후보로 두고,
@@ -13,11 +16,14 @@
 
 export const DEFAULT_COST_SHEET_CSV =
   "https://docs.google.com/spreadsheets/d/1bnKosG3_Ytjg-maMKt1SeaO-ojeQemKp_mzyjnWscD0/gviz/tq?tqx=out:csv&gid=0";
+export const PRODUCT_LIST_CSV =
+  "https://docs.google.com/spreadsheets/d/1bnKosG3_Ytjg-maMKt1SeaO-ojeQemKp_mzyjnWscD0/gviz/tq?tqx=out:csv&gid=705952769";
 
 export interface CostRow {
   name: string;
   cost: number;
-  table: "A" | "B";
+  /** A·B = 첫 탭의 두 표, P = Product List 탭 (보충) */
+  table: "A" | "B" | "P";
 }
 
 export interface CostMatch {
@@ -31,6 +37,8 @@ export interface CostMatch {
 const COST_OVERRIDES: Record<string, number> = {
   "cobaltiny bag (black)": 6750, // 2026-10-27: E열 6,528 · Q열 6,750 중 Q열이 맞음
 };
+
+const TABLE_RANK: Record<CostRow["table"], number> = { A: 0, B: 1, P: 2 };
 
 // 시트 약어 → 옵션 표기
 const SYNONYM: Record<string, string> = { bl: "black", bk: "black", blk: "black", w: "white", wh: "white", iv: "ivory", br: "brown" };
@@ -105,10 +113,48 @@ export function costRowsFromCsv(csv: string): CostRow[] {
   ];
 }
 
-export async function loadCostRows(url = process.env.ABLY_COST_SHEET_CSV ?? DEFAULT_COST_SHEET_CSV): Promise<CostRow[]> {
+/** Product List 탭: C열 상품명 · E열 원가 (B표 없음 — P·Q열은 다른 값이라 읽지 않는다) */
+export function productListRowsFromCsv(csv: string): CostRow[] {
+  const overrides = new Map(Object.entries(COST_OVERRIDES).map(([k, v]) => [norm(k), v]));
+  return parseCsv(csv)
+    .slice(1)
+    .filter((r) => r[2]?.trim() && won(r[4]) > 0)
+    .map((r) => ({ name: r[2].trim(), cost: overrides.get(norm(r[2])) ?? won(r[4]), table: "P" as const }));
+}
+
+/** 앞 목록에 없는 이름만 뒤에 붙임 */
+export function withSupplement(main: CostRow[], extra: CostRow[]): CostRow[] {
+  const have = new Set(main.map((x) => norm(x.name)));
+  const seen = new Set<string>();
+  return [
+    ...main,
+    ...extra.filter((x) => {
+      const k = norm(x.name);
+      if (have.has(k) || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }),
+  ];
+}
+
+async function fetchCsv(url: string): Promise<string> {
   const r = await fetch(`${url}&_t=${Date.now()}`);
   if (!r.ok) throw new Error(`원가 시트 ${r.status}`);
-  return costRowsFromCsv(await r.text());
+  return r.text();
+}
+
+export async function loadCostRows(
+  url = process.env.ABLY_COST_SHEET_CSV ?? DEFAULT_COST_SHEET_CSV,
+  productListUrl = process.env.COST_PRODUCT_LIST_CSV ?? PRODUCT_LIST_CSV,
+): Promise<CostRow[]> {
+  const main = costRowsFromCsv(await fetchCsv(url));
+  if (!productListUrl) return main;
+  // 보충 탭을 못 읽어도 첫 탭만으로 보고서는 만든다
+  const extra = await fetchCsv(productListUrl).then(productListRowsFromCsv).catch((e: Error) => {
+    console.warn(`[원가] Product List 탭을 못 읽어 첫 탭만 씀: ${e.message}`);
+    return [] as CostRow[];
+  });
+  return withSupplement(main, extra);
 }
 
 export function matchCost(rows: CostRow[], goodsName: string, goodsCode: string, option: string): CostMatch {
@@ -123,9 +169,9 @@ export function matchCost(rows: CostRow[], goodsName: string, goodsCode: string,
     if (rest.length) variants++;
     const matched = rest.filter((x) => hayTokens.has(x)).length;
     const unmatched = rest.length - matched;
-    // 일치 단어가 많을수록, 안 맞는 단어가 적을수록 우선. 동점이면 A표.
+    // 일치 단어가 많을수록, 안 맞는 단어가 적을수록 우선. 동점이면 A표 → B표 → Product List 순.
     const score = 2 + matched * 10 - unmatched;
-    if (!best || score > best.score || (score === best.score && row.table === "A" && best.row.table === "B")) {
+    if (!best || score > best.score || (score === best.score && TABLE_RANK[row.table] < TABLE_RANK[best.row.table])) {
       best = { row, score, matched, unmatched };
     }
   }

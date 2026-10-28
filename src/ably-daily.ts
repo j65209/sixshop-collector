@@ -20,10 +20,10 @@
  */
 import "dotenv/config";
 import { loadCostRows, matchCost } from "./ably-cost.js";
+import { REPORTS_REPO, writeDailyReport } from "./reports-repo.js";
 
 const API = "https://api.a-bly.com";
 const SHIPPING_COST = Number(process.env.ABLY_SHIPPING_COST ?? 2200);
-const REPORTS_REPO = process.env.REPORTS_REPO ?? "j65209/brightbeed-reports";
 const MARKET_NAME = process.env.ABLY_MARKET_NAME ?? "코페리";
 // 취소·반품·환불은 매출에서 제외 (상태 문자열은 에이블리 내부 코드라 패턴으로 판별)
 const EXCLUDED_STATUS = /CANCEL|REFUND|RETURN|취소|반품|환불/i;
@@ -355,50 +355,10 @@ async function buildReport(date: string) {
 
 type Report = Awaited<ReturnType<typeof buildReport>>;
 
-/* ---------------- 비공개 레포 기록 ---------------- */
-
-async function ghPut(path: string, content: unknown, message: string): Promise<void> {
-  const gh = required("REPORTS_GITHUB_TOKEN");
-  const url = `https://api.github.com/repos/${REPORTS_REPO}/contents/${path}`;
-  const headers = { Authorization: `Bearer ${gh}`, Accept: "application/vnd.github+json" };
-  const cur = await fetch(url, { headers });
-  const sha = cur.ok ? ((await cur.json()) as { sha: string }).sha : undefined;
-  const r = await fetch(url, {
-    method: "PUT",
-    headers,
-    body: JSON.stringify({
-      message,
-      content: Buffer.from(JSON.stringify(content, null, 1)).toString("base64"),
-      ...(sha ? { sha } : {}),
-    }),
-  });
-  if (!r.ok) throw new Error(`GitHub PUT ${path} → ${r.status} ${(await r.text()).slice(0, 200)}`);
-}
-
-async function ghGetJson<T>(path: string): Promise<T | null> {
-  const gh = required("REPORTS_GITHUB_TOKEN");
-  const r = await fetch(`https://api.github.com/repos/${REPORTS_REPO}/contents/${path}`, {
-    headers: { Authorization: `Bearer ${gh}`, Accept: "application/vnd.github.raw+json" },
-  });
-  return r.ok ? ((await r.json()) as T) : null;
-}
+/* ---------------- 비공개 레포 기록 (src/reports-repo.ts) ---------------- */
 
 async function writeRepo(report: Report): Promise<void> {
-  await ghPut(`ably/daily/${report.date}.json`, report, `ably: daily ${report.date}`);
-  type IndexRow = { date: string } & Pick<Report["summary"], "orders" | "paid" | "net" | "ad_spend" | "coupon_orders" | "cost">;
-  const idx = (await ghGetJson<{ days: IndexRow[] }>("ably/index.json")) ?? { days: [] };
-  const s = report.summary;
-  const row: IndexRow = {
-    date: report.date,
-    orders: s.orders,
-    paid: s.paid,
-    net: s.net,
-    ad_spend: s.ad_spend,
-    coupon_orders: s.coupon_orders,
-    cost: s.cost,
-  };
-  idx.days = [row, ...idx.days.filter((d) => d.date !== report.date)].sort((a, b) => b.date.localeCompare(a.date));
-  await ghPut("ably/index.json", { updated_at: report.generated_at, days: idx.days }, `ably: index ${report.date}`);
+  await writeDailyReport("ably", report, "ably");
 }
 
 /* ---------------- 구글시트 기록 ---------------- */

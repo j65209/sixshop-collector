@@ -11,6 +11,7 @@
     "refresh-pp-master": "tsx src/refresh-pp-master.ts",
     "vm-pp-cycle": "tsx src/sync-smartstore.ts && tsx src/refresh-pp-master.ts",
     "ably-daily": "tsx src/ably-daily.ts",
+    "home-daily": "tsx src/home-daily.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "postinstall": "playwright install --with-deps chromium"

@@ -72,6 +72,8 @@ ABLY_EMAIL=me@example.co.kr
 ABLY_PASSWORD=pw
 ABLY_AD_MARKET_SNO=46903   # 코페리
 REPORTS_GITHUB_TOKEN=ghp_test
+SIXSHOP_EMAIL_KOP=kop@example.co.kr
+SIXSHOP_PASSWORD_KOP=pw
 GOOGLE_SERVICE_ACCOUNT_PATH=./keys/sa.json
 EOF
 echo '{}' >"$HOME/projects/sixshop-collector/keys/sa.json"
@@ -87,6 +89,7 @@ check "ably-daily 실행 경로" 'grep -q "<string>$C/mac/run-job.sh</string><st
 check "ably-daily launchd 등록" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.ably-daily" ]'
 check "관리자 15분마다 + 켤 때" 'grep -q "<integer>900</integer>" "$AG/com.brightbeed.autoupdate.plist" && grep -q "RunAtLoad" "$AG/com.brightbeed.autoupdate.plist" && [ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.autoupdate" ]'
 check "자동 관리 목록" 'grep -qx ably-daily "$AH/state/managed.txt"'
+check "코페리 공홈 작업 07:20 · 21:00" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.home-daily-kop" ] && grep -q "<integer>7</integer><key>Minute</key><integer>20</integer>" "$AG/com.brightbeed.home-daily-kop.plist" && grep -q "<integer>21</integer><key>Minute</key><integer>0</integer>" "$AG/com.brightbeed.home-daily-kop.plist"'
 check "설치 끝 안내" 'printf "%s" "$out" | grep -q "끝. 이제 GitHub"'
 check "다 채워져 있으면 남은 일 없음" '! printf "%s" "$out" | grep -q "남은 일"'
 

@@ -16,6 +16,7 @@
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **코드 구조** — Claude Code가 작업할 때 읽는 컨텍스트 |
 | [`docs/EXTERNAL-CRON.md`](docs/EXTERNAL-CRON.md) | **cron-job.org 셋업** — KST 08:00 정확 갱신 보장 |
 | [`mac/README.md`](mac/README.md) | **맥미니 자동 설치** — GitHub 에 올린 수집기(`mac/jobs/*.job`)를 맥미니가 알아서 설치·실행 |
+| [`docs/HOME-DAILY.md`](docs/HOME-DAILY.md) | **공홈 일일 보고서** — 코페리 식스샵 주문 · 원가 · 광고비 → 오피스 전략팀 공홈 탭 |
 
 ## 🚀 빠른 시작
 
