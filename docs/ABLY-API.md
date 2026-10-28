@@ -56,7 +56,7 @@
 
 ## 일일 보고서 수집기
 
-`npm run ably-daily [YYYY-MM-DD]` → `src/ably-daily.ts`. 결과는 비공개 레포 `j65209/brightbeed-reports`의 `ably/daily/{date}.json`·`ably/index.json`과 구글시트 `에이블리_일일`·`에이블리_주문` 탭. 오피스 "업무용 툴 → 에이블리 일일 보고서"가 프록시로 읽는다.
+`npm run ably-daily [YYYY-MM-DD]` → `src/ably-daily.ts`. 결과는 비공개 레포 `j65209/brightbeed-reports`의 `ably/daily/{date}.json`·`ably/index.json`과 구글시트 `에이블리_일일`·`에이블리_주문` 탭. 오피스 "전략팀 → 플랫폼 탭 → 코페리 · 에이블리"가 프록시로 읽는다 (전략팀은 전승훈·전수빈·김수민만).
 
 ## 기타
 
