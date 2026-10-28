@@ -7,7 +7,8 @@
  *   npx tsx src/home-daily.ts kop 2026-10-27                   # 특정 날짜
  *   npx tsx src/home-daily.ts kop 2026-10-27 --dry             # 수집·계산만, 기록 안 함
  *   npx tsx src/home-daily.ts kop 2026-10-05 --xlsx 주문.xlsx   # 받아 둔 주문 엑셀로 계산만 (로그인·기록 안 함)
- *   (--out 파일.json 을 붙이면 만든 보고서를 파일로도 저장)
+ *   (--xlsx 는 여러 번 줄 수 있음 — 엑셀이 1,000건씩 끊겨 있을 때 합쳐서 지난 기간 채우기.
+ *    --out 파일.json 을 붙이면 만든 보고서를 파일로도 저장)
  *
  * 하는 일:
  *   1. 식스샵 관리자 로그인 → 주문 엑셀(상품별로 행 나누기 · 상태 전체 · 최근 주문부터) — ERP 와 같은 방식(src/sixshop.ts)
@@ -49,6 +50,21 @@ function yesterdayKst(): string {
 function readXlsx(path: string): XlsxRow[] {
   const wb = read(readFileSync(path));
   return utils.sheet_to_json<XlsxRow>(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+}
+
+/** 여러 엑셀을 합침 (지난 기간 채우기용) — 같은 주문번호가 여러 파일에 있으면 뒤에 준 파일 것을 씀 */
+function readXlsxFiles(paths: string[]): XlsxRow[] {
+  const byOrder = new Map<string, XlsxRow[]>();
+  for (const p of paths) {
+    const fileOrders = new Map<string, XlsxRow[]>();
+    for (const r of readXlsx(p)) {
+      const k = String(r["주문번호"] ?? "");
+      if (!fileOrders.has(k)) fileOrders.set(k, []);
+      fileOrders.get(k)!.push(r);
+    }
+    for (const [k, rs] of fileOrders) byOrder.set(k, rs);
+  }
+  return [...byOrder.values()].flat();
 }
 
 async function fetchRows(brandId: string, cfg: { name: string; credEnvSuffix: string }): Promise<XlsxRow[]> {
@@ -102,12 +118,12 @@ async function loadAd(brand: string, date: string): Promise<HomeAd> {
 
 async function main(): Promise<void> {
   const pos: string[] = [];
-  let xlsxPath: string | null = null;
+  const xlsxPaths: string[] = [];
   let dry = false;
   let outPath: string | null = null;
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--xlsx") xlsxPath = argv[++i] ?? null;
+    if (argv[i] === "--xlsx") xlsxPaths.push(argv[++i] ?? "");
     else if (argv[i] === "--dry") dry = true;
     else if (argv[i] === "--out") outPath = argv[++i] ?? null;
     else pos.push(argv[i]);
@@ -118,7 +134,7 @@ async function main(): Promise<void> {
   const date = pos[1] ?? yesterdayKst();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`날짜 형식은 YYYY-MM-DD: ${date}`);
 
-  const rows = xlsxPath ? readXlsx(xlsxPath) : await fetchRows(brandId, cfg);
+  const rows = xlsxPaths.length ? readXlsxFiles(xlsxPaths) : await fetchRows(brandId, cfg);
   if (!coversWholeDay(rows, date)) {
     throw new Error(`주문 엑셀(${rows.length}행)이 ${date} 하루 전체를 담고 있지 않아요 — 엑셀은 최근 주문부터라 오래된 날짜는 빠질 수 있어요`);
   }
@@ -138,7 +154,7 @@ async function main(): Promise<void> {
     writeFileSync(outPath, JSON.stringify(report, null, 1));
     console.log(`[home-daily] 보고서 파일: ${outPath}`);
   }
-  if (xlsxPath || dry) {
+  if (xlsxPaths.length || dry) {
     console.log("[home-daily] 시험 실행 — 기록하지 않음");
     return;
   }
