@@ -1,5 +1,10 @@
 /**
- * 식스샵 프로 관리자 로그인 + 상점별 주문 — 맥미니 실시간 수집기(src/home-live.ts)용, 브라우저 없이 HTTP 로.
+ * 식스샵 프로 상점별 주문 — 맥미니 실시간 수집기(src/home-live.ts)용, 브라우저 없이 HTTP 로.
+ *
+ * 상점에 Access Key(공식 Open API, env SIXSHOP_PRO_ACCESS_KEY{credEnvSuffix})가 있으면 그것만 쓴다 — 로그인 없음 · 만료 없음.
+ *   맥미니 실시간 매출(pro-sales) 프록시와 같은 방식 (2026-09 로그인 rate limit 사고 뒤 옮김). 2026-10-28 현재 6개 상점 모두 키가 있다.
+ *   소유자 계정이 "통합 계정"이라 /account/sign-in 이 "not found store"(SM-LOGIN-009 · US-IVP-003, HTTP 500)로 거절해서 키 방식으로 바꿈.
+ * 키가 없는 상점만 아래 관리자 로그인을 쓴다.
  *
  * 관리자 앱(store.sixshop.com, Next.js "store-manager") 코드와 2026-10-28 로그인된 화면에서 확인한 것 (값은 안 보고 비교만):
  *   1. 로그인  POST https://storemanager-be.sixshop.io/v1/api/account/sign-in  {accountId: 이메일, password}  (소유자 로그인)
@@ -15,14 +20,15 @@
  *   - 로그인이 실패하면 그 비밀번호로는 6시간 동안 다시 시도하지 않는다 (30분마다 틀린 비밀번호로 로그인하지 않게).
  *     .env 의 비밀번호를 고치면 바로 다시 시도한다.
  *
- * env: SIXSHOP_PRO_EMAIL · SIXSHOP_PRO_PASSWORD · (선택) SIXSHOP_PRO_LOGIN_TYPE(owner 기본 · user) · SIXSHOP_PRO_TOKEN_FILE
+ * env: SIXSHOP_PRO_ACCESS_KEY_{KOP·APT·…} (상점별, 있으면 이것만) · 키 없는 상점용 SIXSHOP_PRO_EMAIL · SIXSHOP_PRO_PASSWORD
+ *      (선택) SIXSHOP_PRO_LOGIN_TYPE(owner 기본 · user) · SIXSHOP_PRO_TOKEN_FILE
  */
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProOrder } from "./home-report-pro.js";
-import { fetchProOrders, PRO_API, ProAuthError } from "./sixshop-pro-orders.js";
+import { fetchProOrders, openApiHeaders, ORDERS_URL, PRO_API, ProAuthError } from "./sixshop-pro-orders.js";
 
 export interface ProSession {
   orders(store: string, fromIso: string, toIso: string): Promise<ProOrder[]>;
@@ -129,13 +135,15 @@ interface LoginUser {
   storeNames?: { storeName: string }[];
 }
 
-export async function proLogin(opts: { persist?: boolean } = {}): Promise<ProSession> {
+export async function proLogin(opts: { persist?: boolean; accessKeys?: Record<string, string | undefined> } = {}): Promise<ProSession> {
   const persist = opts.persist ?? true;
+  const accessKeys = opts.accessKeys ?? {};
   const file = tokenFile();
   const type = loginType();
-  const email = env("SIXSHOP_PRO_EMAIL");
+  // 계정은 키 없는 상점이 있을 때만 필요 — 없으면 로그인할 때 알림
+  const email = process.env.SIXSHOP_PRO_EMAIL ?? "";
   const account = sha(`${type}\n${email}`);
-  const cred = sha(`${type}\n${email}\n${env("SIXSHOP_PRO_PASSWORD")}`);
+  const credOf = () => sha(`${type}\n${env("SIXSHOP_PRO_EMAIL")}\n${env("SIXSHOP_PRO_PASSWORD")}`);
 
   let saved: TokenFile = {};
   try {
@@ -158,6 +166,7 @@ export async function proLogin(opts: { persist?: boolean } = {}): Promise<ProSes
 
   /** 로그인 — 같은 비밀번호로 최근에 실패했으면 다시 시도하지 않음 */
   const signIn = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const cred = credOf();
     const f = state.loginFail;
     if (f && f.cred === cred && Date.now() - f.at < LOGIN_BACKOFF_MS) {
       const at = new Date(f.at + 9 * 3600_000).toISOString().slice(5, 16).replace("T", " ");
@@ -181,7 +190,7 @@ export async function proLogin(opts: { persist?: boolean } = {}): Promise<ProSes
   let main: Promise<{ token: string; userId: string; store: string }> | null = null;
   const owner = () =>
     (main ??= signIn(async () => {
-      const d = await authPost("/account/sign-in", { accountId: email, password: env("SIXSHOP_PRO_PASSWORD") });
+      const d = await authPost("/account/sign-in", { accountId: env("SIXSHOP_PRO_EMAIL"), password: env("SIXSHOP_PRO_PASSWORD") });
       const u = ((d.selltore as LoginUser | undefined) ?? d) as LoginUser;
       const meta = d.meta as { preferredStoreName?: string } | undefined;
       const userId = u.ownerId ?? u.userId;
@@ -195,7 +204,7 @@ export async function proLogin(opts: { persist?: boolean } = {}): Promise<ProSes
   /** 그 상점 토큰 새로 받기 — 소유자: 로그인 1번 + 상점 전환 · 관리자(user): 상점마다 로그인 */
   const fetchToken = async (store: string): Promise<StoreToken> => {
     if (type === "user") {
-      const d = (await signIn(() => authPost("/user/signin", { storeName: store, userId: email, password: env("SIXSHOP_PRO_PASSWORD") }))) as LoginUser;
+      const d = (await signIn(() => authPost("/user/signin", { storeName: store, userId: env("SIXSHOP_PRO_EMAIL"), password: env("SIXSHOP_PRO_PASSWORD") }))) as LoginUser;
       if (!d.userToken || d.userId == null) throw new Error(`식스샵 프로 관리자 로그인 응답에 토큰이 없어요 (${store})`);
       return { token: d.userToken, userId: String(d.userId), exp: jwtExp(d.userToken), fetchedAt: Date.now() };
     }
@@ -215,6 +224,9 @@ export async function proLogin(opts: { persist?: boolean } = {}): Promise<ProSes
 
   return {
     async orders(store, fromIso, toIso) {
+      // Access Key 가 있는 상점은 로그인 · 토큰 파일 없이 Open API 로 (키가 안 먹으면 그대로 실패 — 로그인으로 돌아가지 않음)
+      const key = accessKeys[store];
+      if (key) return fetchProOrders(openApiHeaders(key, store), fromIso, toIso, ORDERS_URL.accessKey);
       const cached = state.stores![store];
       const t = cached && tokenUsable(cached) ? cached : await renew(store);
       try {

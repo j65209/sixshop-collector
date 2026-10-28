@@ -11,7 +11,8 @@
  *   npm run home-live -- --dry            # 계산만 — 기록 · 상태 파일 안 씀
  *   npm run home-live -- --brands kop,apt # 일부 브랜드만
  *
- * env: SIXSHOP_PRO_EMAIL · SIXSHOP_PRO_PASSWORD (식스샵 프로 관리자 — 코페리 · 아페티 · 코즈미가 다 보이는 계정) · REPORTS_GITHUB_TOKEN
+ * env: SIXSHOP_PRO_ACCESS_KEY_{KOP·APT·KOZ·PP·AKOI·CT} (상점별 공식 Open API 키 — 맥미니 프록시 config.env 와 같은 값) · REPORTS_GITHUB_TOKEN
+ *      키 없는 상점이 있으면 SIXSHOP_PRO_EMAIL · SIXSHOP_PRO_PASSWORD (식스샵 프로 소유자 로그인, src/sixshop-pro.ts)
  *      (선택) HOME_LIVE_STATE(상태 파일 위치) · HOME_FEE_RATE 등 (src/home-brands.ts)
  * 구매자 이름 · 연락처 · 주소 · 메모 · 작성형 옵션은 어디에도 저장하지 않는다 (src/sixshop-pro-orders.ts slimOrder).
  */
@@ -183,7 +184,9 @@ async function main(): Promise<void> {
   for (const b of brands) if (!HOME_BRANDS[b]) throw new Error(`없는 브랜드: ${b} (${Object.keys(HOME_BRANDS).join(", ")})`);
 
   const { proLogin } = await import("./sixshop-pro.js");
-  const pro = await proLogin({ persist: !dry });
+  // 상점별 Access Key 가 있으면 로그인하지 않음 (src/sixshop-pro.ts)
+  const accessKeys = Object.fromEntries(Object.values(HOME_BRANDS).map((b) => [b.proStore, process.env[`SIXSHOP_PRO_ACCESS_KEY${b.credEnvSuffix}`]]));
+  const pro = await proLogin({ persist: !dry, accessKeys });
   const state = readState();
   const res = await runLive(
     { days, brands, dry, state },

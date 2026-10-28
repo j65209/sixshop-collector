@@ -1,7 +1,8 @@
 /**
  * 식스샵 프로 로그인 · 상점 전환 · 주문 받기(src/sixshop-pro.ts · src/sixshop-pro-orders.ts) 시험 — 가짜 서버로, 진짜 계정 없이.
  *   npx tsx tests/sixshop-pro.test.ts
- * 요청 주소 · 본문 · 헤더 7개, 상점 토큰 저장 · 다시 쓰기, 토큰이 안 먹을 때 한 번 다시 받기, 페이지 넘기기, 개인정보 빼기를 확인한다.
+ * 요청 주소 · 본문 · 헤더 7개, 상점 토큰 저장 · 다시 쓰기, 토큰이 안 먹을 때 한 번 다시 받기, 페이지 넘기기, 개인정보 빼기,
+ * Access Key(공식 Open API) 상점은 로그인 없이 받는지 확인한다.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
@@ -53,9 +54,12 @@ function fakeServer(opts: { rejectTokenOnce?: string } = {}) {
       issued[s] = jwt(s);
       return json({ code: 200, data: { ownerId: 777, storeName: s, userToken: issued[s] } });
     }
-    if (u.pathname === "/call/order-integration/v2/orders") {
+    // 공식 Open API (api.sixshop.io) — Access Key 헤더, 응답이 data 로 안 싸여 있음
+    const open = u.host === "api.sixshop.io" && u.pathname === "/order-integration/v2/orders";
+    if (u.pathname === "/call/order-integration/v2/orders" || open) {
       const store = headers["ss-store-id"];
-      if (headers.authorization !== `Bearer ${issued[store]}`) return json({ statusCode: 400, message: "store mismatch" }, 400);
+      if (open && headers["authorization-core"] !== `key-${store}`) return json({ message: "invalid key" }, 401);
+      if (!open && headers.authorization !== `Bearer ${issued[store]}`) return json({ statusCode: 400, message: "store mismatch" }, 400);
       if (opts.rejectTokenOnce === store && !rejected.has(store)) {
         rejected.add(store);
         return json({ statusCode: 401, message: "expired" }, 401);
@@ -67,7 +71,8 @@ function fakeServer(opts: { rejectTokenOnce?: string } = {}) {
         productOrders: [{ productOrderId: `${store}-${n}-1`, productName: "Bunny bag", productOptionDisplayName: "색상: black", quantity: 1, unitPrice: 10000, status: "purchaseConfirmed",
           productAdditionalOptions: [{ name: "각인", value: "개인 메모" }] }],
       });
-      return json({ code: 200, data: { list: page === 1 ? [mk(1), mk(2)] : [mk(3)], pagination: { totalPages: 2, totalItems: 3 } } });
+      const body = { list: page === 1 ? [mk(1), mk(2)] : [mk(3)], pagination: { totalPages: 2, totalItems: 3 } };
+      return json(open ? body : { code: 200, data: body });
     }
     return json({ message: "unexpected" }, 500);
   }) as typeof fetch;
@@ -185,6 +190,34 @@ await test("토큰 재사용 규칙 — 30일 토큰은 하루 남을 때까지,
   assert.equal(tokenUsable({ token: "t", userId: "1", exp: null, fetchedAt: now - 8 * 24 * H }, now), false);
   // 20시간짜리 토큰: 받은 지 30분 → 남은 19.5시간 > 5시간 → 다시 씀
   assert.equal(tokenUsable({ token: "t", userId: "1", exp: now + 19.5 * H, fetchedAt: now - 0.5 * H }, now), true);
+});
+
+await test("Access Key 상점은 로그인 · 토큰 파일 없이 Open API 로 (헤더 2개 · 두 페이지 · 개인정보 빼기)", async () => {
+  process.env.SIXSHOP_PRO_TOKEN_FILE = join(dir, "tokens6.json");
+  const saved = { email: process.env.SIXSHOP_PRO_EMAIL, pw: process.env.SIXSHOP_PRO_PASSWORD };
+  delete process.env.SIXSHOP_PRO_EMAIL;
+  delete process.env.SIXSHOP_PRO_PASSWORD;
+  try {
+    const s = fakeServer();
+    const orders = await withFetch(s.fetchImpl, async () => (await proLogin({ accessKeys: { coferry: "key-coferry" } })).orders("coferry", ...R));
+    assert.equal(orders.length, 3);
+    assert.deepEqual(s.calls.map((c) => c.path), ["/order-integration/v2/orders", "/order-integration/v2/orders"]);
+    assert.equal(s.calls[0].headers["ss-store-id"], "coferry");
+    assert.ok(!s.calls[0].headers.authorization, "Bearer 토큰 안 씀");
+    assert.ok(!/홍길동|010-0000|서울|개인 메모/.test(JSON.stringify(orders)));
+    assert.throws(() => statSync(process.env.SIXSHOP_PRO_TOKEN_FILE!), "토큰 파일 안 만듦");
+    // 키 없는 상점은 계정이 필요 — 계정이 없으면 그 상점만 실패
+    await assert.rejects(withFetch(s.fetchImpl, async () => (await proLogin({ accessKeys: { coferry: "key-coferry" } })).orders("apeti", ...R)), /SIXSHOP_PRO_EMAIL/);
+  } finally {
+    process.env.SIXSHOP_PRO_EMAIL = saved.email;
+    process.env.SIXSHOP_PRO_PASSWORD = saved.pw;
+  }
+});
+
+await test("Access Key 가 안 먹으면(401) 로그인으로 돌아가지 않고 실패", async () => {
+  const s = fakeServer();
+  await assert.rejects(withFetch(s.fetchImpl, async () => (await proLogin({ accessKeys: { coferry: "wrong" } })).orders("coferry", ...R)), /401/);
+  assert.ok(!s.calls.some((c) => c.path.includes("sign-in")));
 });
 
 console.log(`\n결과: 통과 ${pass}${process.exitCode ? " · 실패 있음" : " · 실패 0"}`);

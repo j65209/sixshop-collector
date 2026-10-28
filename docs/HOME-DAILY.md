@@ -8,7 +8,7 @@
 
 ## 실시간 (30분마다) — `src/home-live.ts`
 
-맥미니 `mac/jobs/home-live.job` 이 **30분마다** 실행. 식스샵 프로에 로그인(`src/sixshop-pro.ts`)해서 여섯 상점 주문을 받고
+맥미니 `mac/jobs/home-live.job` 이 **30분마다** 실행. 식스샵 프로 공식 Open API(상점별 Access Key, `src/sixshop-pro.ts`)로 여섯 상점 주문을 받고
 **오늘(진행 중) · 어제** 보고서를 다시 계산해, 바뀐 것만 brightbeed-reports 에 **커밋 하나로** 올린다 (`commitFiles`, Git Data API).
 06시 이후 첫 실행은 **지난 8일**을 다시 계산 — 늦은 취소 · 환불, 주말에 밀린 광고 시트 입력 (상태 `~/brightbeed-auto/state/home-live.json`).
 
@@ -23,10 +23,21 @@ npm run home-live -- --brands kop      # 일부 브랜드만
 - 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 — 그 전은 프로 데이터에 네이버페이 주문형이 없어서 (코페리 10-20 · 아페티 10-22 · 코즈미 09-03).
 - 광고비 (`src/home-ad.ts`): 광고 시트 값이 있으면 그것, 아직 없으면 **메타 광고 데이터**(`beaduniverse/data/meta-ads/{브랜드}.json`, 맥미니가 약 1시간마다 갱신)의
   오늘 · 어제 광고비 × 그날 환율로 **추정** (`assumptions.ad_estimated`, 오피스 "메타 기준 추정"). 광고 시트 krw 도 메타 달러 × 환율이라 같은 계산.
-- env (맥미니 `.env`): `SIXSHOP_PRO_EMAIL` · `SIXSHOP_PRO_PASSWORD` (상점이 다 보이는 식스샵 프로 **소유자** 계정 — 직원 계정이면 `SIXSHOP_PRO_LOGIN_TYPE=user`) · `REPORTS_GITHUB_TOKEN`.
+- env (맥미니 `.env`): `SIXSHOP_PRO_ACCESS_KEY_{KOP·APT·KOZ·PP·AKOI·CT}` (상점별 Access Key — 맥미니 프록시 `~/server/brightbeed-proxy/config.env` 와 같은 값) · `REPORTS_GITHUB_TOKEN`.
+  키가 없는 상점만 `SIXSHOP_PRO_EMAIL` · `SIXSHOP_PRO_PASSWORD` (소유자 로그인, 아래 — 직원 계정이면 `SIXSHOP_PRO_LOGIN_TYPE=user`).
 - 시험 (네트워크 · 계정 없이): `npx tsx tests/home-live.test.ts` · `npx tsx tests/sixshop-pro.test.ts`
 
-### 식스샵 프로 로그인 (`src/sixshop-pro.ts`, 브라우저 없이 HTTP)
+### 식스샵 프로 주문 받기 (`src/sixshop-pro.ts`, 브라우저 없이 HTTP)
+
+**Access Key (기본, 2026-10-28~)** — 맥미니 실시간 매출(pro-sales) 프록시와 같은 방식. 로그인 없음 · 키 만료 없음.
+`GET https://api.sixshop.io/order-integration/v2/orders?page&limit=100&sort=-orderedAt&orderedAtMin&orderedAtMax`
+헤더 `Authorization-Core: <키>` · `SS-Store-ID: <상점 이름>` → `{list[], pagination}` (관리자 서버 `/call/...` 과 필드가 같다 — `data` 로 안 싸여 있을 뿐).
+키 발급은 상점마다 식스샵 앱 개발자센터에서 (프록시 메모 참고). 키가 안 먹으면 그대로 실패 — 로그인으로 돌아가지 않는다.
+
+> 왜 바꿨나: 2026-10-28 소유자 계정 로그인이 `500 SM-LOGIN-009` (안쪽 `US-IVP-003 · not found store`)로 거절됨 — 통합 계정이라 상점 관리자 로그인에 상점이 안 잡힘.
+> 2026-09 에도 30분마다 로그인하다가 429 rate limit 사고가 나서 프록시를 키 방식으로 옮겼었다.
+
+**소유자 로그인 (키 없는 상점만)** — 관리자 앱 코드 분석 + 2026-10-28 로그인된 화면에서 확인 (값은 보지 않고 비교만):
 
 관리자 앱 코드 분석 + 2026-10-28 로그인된 화면에서 확인 (값은 보지 않고 비교만):
 
