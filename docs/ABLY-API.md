@@ -3,8 +3,15 @@
 2026-10-27, my.a-bly.com(코페리 마켓) 화면에서 캡처. 공식 오픈 API가 아니라 셀러 어드민이 내부적으로 쓰는 API라 예고 없이 바뀔 수 있다.
 
 - Base: `https://api.a-bly.com`
-- 인증: `Authorization` 헤더 (로그인 토큰). 쿠키 아님.
-- 로그인: `POST /seller/login/` (아이디·비밀번호) → 토큰
+- 인증: `Authorization: JWT <access_token>` 헤더 (`Bearer` 는 401). 쿠키 아님.
+- 로그인: `POST /seller/login/` `{email, password}` → `{access_token, refresh_token}` — 2026-10-28 맥미니에서 확인 (값은 안 보고 응답 키만).
+  - 아이디 필드는 **`email`** 하나. `username` · `id` 는 400 `{code: 1, message: "이메일은 필수 항목입니다"}`. 비밀번호 불일치는 `{code: 2}`.
+  - 응답 키는 `token` 이 아니라 **`access_token`** (JWT **1시간**) · `refresh_token` (JWT **7일**).
+  - 갱신: `POST /seller/refresh/` `{refresh_token}` → 새 `access_token` · 새 `refresh_token`(또 7일). 셀러 어드민 화면(app.js `loginService.refresh`)과 같은 방식.
+  - 화면에 MFA(`login/mfa`) 경로도 있음 — 지금 코페리 계정은 안 걸림. 걸리면 로그인 응답에 토큰이 없어 실패로 알림.
+- 토큰 저장 (`src/ably-api.ts` `ablyLogin`): 맥미니 `~/brightbeed-auto/state/ably-token.json` (권한 600, 이메일 해시로 계정에 묶음).
+  access_token 이 15분 넘게 남았으면 그대로 → 아니면 refresh → 그것도 안 되면 로그인. 401 이면 한 번만 새로 받아 다시.
+  **로그인이 실패하면 같은 비밀번호로는 6시간 쉼** (계정 잠금 방지, .env 를 고치면 바로 다시). `--dry` 는 파일을 쓰지 않음.
 - CORS: `Access-Control-Allow-Origin: https://my.a-bly.com` 만 허용 → **github.io(오피스)에서 브라우저로 직접 호출 불가**. 서버/러너에서 호출해야 함.
 - 셀러 어드민은 새로고침하면 로그인이 풀림 (토큰을 메모리/탭 단위로 보관).
 
@@ -54,11 +61,38 @@
 
 배열 `[{ datetime, charge(광고비), order_price(광고 기여 매출), order_count, display, click, roas, … }]`. 날짜는 `YYYY-MM-DD`. 코페리 ad_market_sno = 46903.
 
+## 코드
+
+- `src/ably-api.ts` — 로그인 · 토큰 저장 · 주문(`fetchOrders`, per_page 100 + total-count 확인, 개인정보는 받은 즉시 버림) · 정산 · 광고비 · 기획전 · 쿠폰
+- `src/ably-report.ts` — `buildAblyReport` 등 계산 (네트워크 없음)
+- `src/ably-daily.ts` — 매일 07:10 실행 파일 (어제 하루 · 구글시트 · `--raw` 지난 기간 채우기)
+- `src/ably-live.ts` — 30분마다 실행 파일 (아래)
+
 ## 일일 보고서 수집기
 
 `npm run ably-daily [YYYY-MM-DD]` → `src/ably-daily.ts`. 결과는 비공개 레포 `j65209/brightbeed-reports`의 `ably/daily/{date}.json`·`ably/index.json`과 구글시트 `에이블리_일일`·`에이블리_주문` 탭. 오피스 "전략팀 → 플랫폼 탭 → 코페리 · 에이블리"가 프록시로 읽는다 (전략팀은 전승훈·전수빈·김수민만).
 
 맥미니에서 매일 07:10 자동 실행 — `mac/jobs/ably-daily.job` (자동 설치 관리자, [`mac/README.md`](../mac/README.md)). 설정값은 맥미니 `~/brightbeed-auto/sixshop-collector/.env`.
+
+## 실시간 (30분마다) — `src/ably-live.ts`
+
+맥미니 `mac/jobs/ably-live.job` 이 **30분마다** 실행. **오늘(진행 중) · 어제** 보고서를 다시 계산해 바뀐 것만
+`ably/daily/{날짜}.json` · `ably/index.json` 에 **커밋 하나로** 올린다 (`commitFiles`). 공홈 실시간(`src/home-live.ts`)과 같은 규칙.
+06시 이후 그날 첫 실행은 **지난 8일**을 다시 계산 — 늦은 취소 · 반품 (상태 `~/brightbeed-auto/state/ably-live.json` `{settled}`, 실패 없을 때만 기록).
+
+```bash
+npm run ably-live                 # 오늘 · 어제 (+ 그날 첫 06시 이후 실행이면 지난 8일)
+npm run ably-live -- --days 8     # 오늘부터 8일
+npm run ably-live -- --dry        # 계산만 — 레포 · 상태 파일 · 토큰 파일 안 씀
+```
+
+- 한 번 실행에 API: `order_items` 를 `date_type=checked_at` 로 가장 오래된 날 00:00 ~ 지금 한 번(per_page 100, total-count 로 건수 확인),
+  정산 `histories` 는 필요한 달마다(`feeWindow`), 광고비 `statistics_timeseries` 는 기간 한 번, 기획전 · 쿠폰은 한 번. 로그인은 거의 안 함(토큰 저장 · refresh).
+- 오늘 보고서에는 `as_of`(계산 시각 HH:MM, KST) · `assumptions.partial_day: true` — index.json 줄에도 `as_of`. 자정이 지나면 그날은 `as_of` 없이 다시 올라간다.
+  숫자가 그대로면 안 올리지만 55분이 지나면 오늘 파일 시각만 새로 올림. 지난 날짜 쿠폰은 그날 이후 시작한 것을 뺀다 (`couponsAsOf`).
+- 실패 처리: 에이블리 · GitHub 읽기 · 원가 시트(보충 탭 포함) 중 하나라도 실패하면 **아무것도 덮지 않고** 종료 코드 1 (`ghGetJson` 은 404 만 "없음").
+- env: `ABLY_EMAIL` · `ABLY_PASSWORD` · `ABLY_AD_MARKET_SNO` · `REPORTS_GITHUB_TOKEN`. 시험: `npx tsx tests/ably-live.test.ts` (네트워크 · 계정 없이).
+- 매일 07:10 `ably-daily`(어제 하루 + 구글시트)는 그대로 둔다 — 같은 날짜 파일을 같은 계산으로 다시 쓰는 것이라 충돌 없음.
 
 ## 지난 기간 채우기 (`--raw`)
 

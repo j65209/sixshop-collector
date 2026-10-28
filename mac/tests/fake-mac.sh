@@ -104,6 +104,7 @@ check "ably-daily launchd 등록" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.abl
 check "관리자 15분마다 + 켤 때" 'grep -q "<integer>900</integer>" "$AG/com.brightbeed.autoupdate.plist" && grep -q "RunAtLoad" "$AG/com.brightbeed.autoupdate.plist" && [ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.autoupdate" ]'
 check "자동 관리 목록" 'grep -qx ably-daily "$AH/state/managed.txt"'
 check "공홈 실시간 작업 30분마다" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.home-live" ] && grep -q "<key>StartInterval</key><integer>1800</integer>" "$AG/com.brightbeed.home-live.plist"'
+check "에이블리 실시간 작업 30분마다" '[ -e "$FAKE_LAUNCHD/loaded/com.brightbeed.ably-live" ] && grep -q "<key>StartInterval</key><integer>1800</integer>" "$AG/com.brightbeed.ably-live.plist"'
 check "설치 끝 안내" 'printf "%s" "$out" | grep -q "끝. 이제 GitHub"'
 check "다 채워져 있으면 남은 일 없음" '! printf "%s" "$out" | grep -q "남은 일"'
 
