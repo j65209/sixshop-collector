@@ -94,7 +94,10 @@ export function couponsAsOf(list: AblyCoupon[], date: string) {
   return couponsOn(list.filter((c) => !c.started_at || String(c.started_at).slice(0, 10) <= date), date);
 }
 
-/** 받아 온 데이터로 하루 보고서 계산 */
+/** 원가 시트를 아직 연결하지 않은 마켓 — 공홈 원가 없는 브랜드(home-report-pro costUnavailable)와 같은 표시 */
+const NO_COST_BASIS = "원가 미반영 — 이 마켓 원가 시트 연결 전 (순이익에서 원가를 빼지 않음)";
+
+/** 받아 온 데이터로 하루 보고서 계산. opts.market 기본은 ABLY_MARKET_NAME(코페리), costUnavailable 이면 원가 미반영 */
 export function buildAblyReport(
   date: string,
   d: {
@@ -105,12 +108,16 @@ export function buildAblyReport(
     coupons: ReturnType<typeof couponsOn>;
   },
   costRows: CostRow[],
+  opts: { market?: string; costUnavailable?: boolean } = {},
 ) {
   const { items, fee, ad, events, coupons } = d;
+  const noCost = !!opts.costUnavailable;
   const orders = items.map((o) => {
     const excluded = EXCLUDED_STATUS.test(o.status ?? "");
     const discount = (o.exact_coupon_discount || 0) + (o.exact_emoney_discount || 0) + (o.exact_pay_benefit_discount || 0);
-    const cm = matchCost(costRows, o.goods_name ?? "", o.goods_custom_code ?? "", o.option_info ?? "");
+    const cm = noCost
+      ? { cost_unit: null, cost_name: null, cost_match: null }
+      : matchCost(costRows, o.goods_name ?? "", o.goods_custom_code ?? "", o.option_info ?? "");
     return {
       sno: o.sno,
       order_sno: o.order_sno,
@@ -155,13 +162,13 @@ export function buildAblyReport(
   return {
     date,
     generated_at: new Date().toISOString(),
-    market: MARKET_NAME,
+    market: opts.market ?? MARKET_NAME,
     channel: "ably",
     assumptions: {
       shipping_cost_per_order: SHIPPING_COST,
       fee_rate: Number(fee.rate.toFixed(4)),
       fee_basis: fee.basis,
-      cost_basis: "원가 시트(기획전 계산기 시트) E열 → 없으면 Q열, 상품명·옵션으로 매칭",
+      cost_basis: noCost ? NO_COST_BASIS : "원가 시트(기획전 계산기 시트) E열 → 없으면 Q열, 상품명·옵션으로 매칭",
       date_basis: "결제일(checked_at)",
       excluded_status: "취소·반품·환불 상태는 매출에서 제외",
     },
@@ -179,7 +186,7 @@ export function buildAblyReport(
       shipping,
       ad_spend: ad.charge,
       ad_order_price: ad.adOrderPrice,
-      cost,
+      cost: noCost ? null : cost,
       cost_missing_items: live.filter((o) => o.cost_match === "none").length,
       cost_base_items: live.filter((o) => o.cost_match === "base").length,
       net,

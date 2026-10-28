@@ -85,6 +85,12 @@ cat >"$HOME/projects/sixshop-collector/.env" <<'EOF'
 ABLY_EMAIL=me@example.co.kr
 ABLY_PASSWORD=pw
 ABLY_AD_MARKET_SNO=46903   # 코페리
+ABLY_EMAIL_APT=apt@example.co.kr
+ABLY_PASSWORD_APT=pw
+ABLY_AD_MARKET_SNO_APT=60636   # 아페티
+ABLY_EMAIL_6A=6a@example.co.kr
+ABLY_PASSWORD_6A=pw
+ABLY_AD_MARKET_SNO_6A=22249   # 식스에이
 REPORTS_GITHUB_TOKEN=ghp_test
 SIXSHOP_PRO_EMAIL=pro@example.co.kr
 SIXSHOP_PRO_PASSWORD=pw
@@ -179,7 +185,7 @@ FAKE_JOB_RC=3 bash "$C/mac/run-job.sh" ably-daily
 check "실패 기록 (종료 코드 3)" 'grep -qx "detail=종료 코드 3" "$AH/state/status-ably-daily.txt"'
 FAKE_JOB_RC=1 FAKE_JOB_MSG="[ably-daily] 실패: 에이블리 로그인 실패" bash "$C/mac/run-job.sh" ably-daily
 check "실패하면 마지막 오류 줄도 상태에 (맥에 가지 않고 원인 보기)" 'grep -qxF "detail=종료 코드 1 — [ably-daily] 실패: 에이블리 로그인 실패" "$AH/state/status-ably-daily.txt"'
-cp "$C/.env" "$T/env.bak"; grep -v "^ABLY_PASSWORD" "$T/env.bak" >"$C/.env"
+cp "$C/.env" "$T/env.bak"; grep -v "^ABLY_PASSWORD=" "$T/env.bak" >"$C/.env"
 bash "$C/mac/run-job.sh" ably-daily
 check "설정값 없으면 실행 안 함" 'grep -qx "detail=설정값 없음: ABLY_PASSWORD" "$AH/state/status-ably-daily.txt"'
 echo "ABLY_PASSWORD=..." >>"$C/.env"; bash "$C/mac/run-job.sh" ably-daily

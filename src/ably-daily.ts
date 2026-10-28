@@ -135,7 +135,7 @@ async function writeSheets(report: Report): Promise<void> {
     .map((o) => [
       report.date, o.order_sno, o.sno, o.status, o.excluded ? "Y" : "", o.goods_name, o.option, o.ea, o.gross,
       o.coupon, o.coupon_by_ably, o.emoney, o.pay_benefit, o.paid, o.cost_unit != null ? o.cost : "",
-      o.cost_name ?? "", { exact: "일치", base: "기본값", none: "미확인" }[o.cost_match], o.delivery_type,
+      o.cost_name ?? "", o.cost_match ? { exact: "일치", base: "기본값", none: "미확인" }[o.cost_match] : "", o.delivery_type,
     ]);
   if (rows.length) {
     await sheets.spreadsheets.values.append({
@@ -182,7 +182,7 @@ async function backfill(path: string, dry: boolean): Promise<void> {
       costRows,
     );
     const s = report.summary;
-    console.log(`[ably-daily] ${d} 주문 ${s.orders} · 실결제 ${s.paid.toLocaleString("ko-KR")} · 광고비 ${s.ad_spend.toLocaleString("ko-KR")} · 원가 ${s.cost.toLocaleString("ko-KR")} · 순이익 ${s.net.toLocaleString("ko-KR")} · 원가 미확인 ${s.cost_missing_items}건`);
+    console.log(`[ably-daily] ${d} 주문 ${s.orders} · 실결제 ${s.paid.toLocaleString("ko-KR")} · 광고비 ${s.ad_spend.toLocaleString("ko-KR")} · 원가 ${(s.cost ?? 0).toLocaleString("ko-KR")} · 순이익 ${s.net.toLocaleString("ko-KR")} · 원가 미확인 ${s.cost_missing_items}건`);
     files.push({ path: `ably/daily/${d}.json`, content: report });
     rows.push(indexRowOf(report));
   }

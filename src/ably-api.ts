@@ -8,13 +8,16 @@
  *   POST /seller/refresh/ {refresh_token} → {access_token, refresh_token?} — 셀러 어드민 화면(my.a-bly.com app.js loginService.refresh)과 같은 갱신
  *   비밀번호 불일치는 {code: 2}
  *
- * 맥미니 상태 폴더의 토큰 파일 ~/brightbeed-auto/state/ably-token.json (권한 600, src/sixshop-pro.ts 와 같은 규칙):
+ * 맥미니 상태 폴더의 토큰 파일 ~/brightbeed-auto/state/ably-token.json — 마켓마다 따로 (코페리 ably-token.json · 아페티 ably-token-apt.json …)
+ * (권한 600, src/sixshop-pro.ts 와 같은 규칙):
  *   - access_token 이 수명의 1/4(15분) 넘게 남았으면 그대로, 아니면 refresh_token 으로 갱신, 그것도 안 되면 로그인 — 30분마다 로그인하지 않게.
  *   - 로그인 방식 + 이메일 해시로 계정에 묶음 (.env 계정이 바뀌면 버림). 401 이면 한 번만 새로 받아 다시.
  *   - 로그인이 실패하면 같은 비밀번호로는 6시간 동안 다시 시도하지 않는다 (계정 잠금 방지). .env 비밀번호를 고치면 바로 다시.
  *   - persist=false(--dry)면 파일을 쓰지 않는다.
  *
- * env: ABLY_EMAIL · ABLY_PASSWORD · (선택) ABLY_TOKEN_FILE
+ *   - 같은 계정으로 따로 로그인해도 다른 세션(사람이 쓰는 셀러 어드민 · ably-collector)은 끊기지 않는다 (2026-10-28 확인).
+ *
+ * env: ABLY_EMAIL · ABLY_PASSWORD (마켓마다 뒤에 envSuffix, src/ably-brands.ts) · (선택) ABLY_TOKEN_FILE (코페리 토큰 파일 위치)
  */
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -28,7 +31,10 @@ const LOGIN_BACKOFF_MS = 6 * 3600_000;
 const REFRESH_MIN_LEFT_MS = 3600_000;
 const LOGIN_FIELD = "email";
 
-const tokenFile = () => process.env.ABLY_TOKEN_FILE ?? join(homedir(), "brightbeed-auto", "state", "ably-token.json");
+/** 코페리(envSuffix "") = ably-token.json · 다른 마켓 = ably-token-{apt|6a}.json */
+const tokenFile = (envSuffix: string) =>
+  (envSuffix ? undefined : process.env.ABLY_TOKEN_FILE) ??
+  join(homedir(), "brightbeed-auto", "state", `ably-token${envSuffix.toLowerCase().replace(/_/g, "-")}.json`);
 const sha = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 32);
 
 function env(name: string): string {
@@ -139,12 +145,15 @@ async function postJson(path: string, body: unknown): Promise<{ ok: boolean; sta
 
 const tokenOf = (j: Record<string, unknown>) => (j.access_token ?? j.token) as string | undefined;
 
-export async function ablyLogin(opts: { persist?: boolean } = {}): Promise<AblyClient> {
+/** opts.envSuffix: 마켓 계정 — ABLY_EMAIL{envSuffix} · ABLY_PASSWORD{envSuffix} (src/ably-brands.ts). tokenFile 은 시험용 */
+export async function ablyLogin(opts: { persist?: boolean; envSuffix?: string; tokenFile?: string } = {}): Promise<AblyClient> {
   const persist = opts.persist ?? true;
-  const file = tokenFile();
-  const email = env("ABLY_EMAIL");
+  const sfx = opts.envSuffix ?? "";
+  const file = opts.tokenFile ?? tokenFile(sfx);
+  const email = env(`ABLY_EMAIL${sfx}`);
+  const password = () => env(`ABLY_PASSWORD${sfx}`);
   const account = sha(`${LOGIN_FIELD}\n${email}`);
-  const cred = sha(`${LOGIN_FIELD}\n${email}\n${env("ABLY_PASSWORD")}`);
+  const cred = sha(`${LOGIN_FIELD}\n${email}\n${password()}`);
 
   let saved: TokenFile = {};
   try {
@@ -175,10 +184,10 @@ export async function ablyLogin(opts: { persist?: boolean } = {}): Promise<AblyC
     const f = state.loginFail;
     if (f && f.cred === cred && Date.now() - f.at < LOGIN_BACKOFF_MS) {
       const at = new Date(f.at + 9 * 3600_000).toISOString().slice(5, 16).replace("T", " ");
-      throw new Error(`에이블리 로그인을 잠시 쉬는 중 — ${at}(KST) 실패: ${f.message} · .env 의 ABLY_EMAIL · ABLY_PASSWORD 를 고치면 바로 다시 시도`);
+      throw new Error(`에이블리 로그인을 잠시 쉬는 중 — ${at}(KST) 실패: ${f.message} · .env 의 ABLY_EMAIL${sfx} · ABLY_PASSWORD${sfx} 를 고치면 바로 다시 시도`);
     }
     try {
-      const r = await postJson("/seller/login/", { [LOGIN_FIELD]: email, password: env("ABLY_PASSWORD") });
+      const r = await postJson("/seller/login/", { [LOGIN_FIELD]: email, password: password() });
       const access = tokenOf(r.json);
       if (!r.ok || !access) {
         const why = r.json.code === 2 ? `비밀번호 불일치 (${r.json.message ?? "code 2"})` : `HTTP ${r.status} ${String(r.json.message ?? "").slice(0, 80)} (응답 항목: ${Object.keys(r.json).join(", ")})`;

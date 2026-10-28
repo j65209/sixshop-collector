@@ -2,7 +2,8 @@
  * 에이블리 실시간 수집기(src/ably-live.ts runAblyLive) · 로그인 토큰(src/ably-api.ts ablyLogin) 시험 — 네트워크 · 계정 없이.
  *   npx tsx tests/ably-live.test.ts
  * 에이블리 API · 보고서 레포 · 원가 시트를 가짜로 바꿔 끼워 날짜 범위, 오늘만 진행 중 표시, 자정 넘기기, 바뀐 것만 올리기, 55분 규칙,
- * 하루 한 번 8일 다시 계산, 읽기 실패 시 아무것도 안 올리기, 개인정보 빼기, 토큰 저장 · 갱신 · 로그인 실패 쉬기를 확인한다.
+ * 하루 한 번 8일 다시 계산, 읽기 실패 시 아무것도 안 올리기, 원가 없는 마켓(아페티 · 식스에이), 마켓 하나 실패,
+ * 개인정보 빼기, 토큰 저장 · 갱신 · 로그인 실패 쉬기 · 마켓별 계정을 확인한다.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
@@ -14,7 +15,8 @@ const tmp = mkdtempSync(join(tmpdir(), "ably-live-test-"));
 process.env.ABLY_TOKEN_FILE = join(tmp, "ably-token.json");
 process.env.ABLY_EMAIL = "seller@example.com";
 process.env.ABLY_PASSWORD = "pw";
-const { runAblyLive } = await import("../src/ably-live.js");
+const { runAblyLive, settleDone } = await import("../src/ably-live.js");
+const { ABLY_BRANDS } = await import("../src/ably-brands.js");
 const { ablyLogin, fetchOrders, pickOrderItem } = await import("../src/ably-api.js");
 type AblyOrderItem = import("../src/ably-api.js").AblyOrderItem;
 
@@ -50,30 +52,40 @@ const ITEMS: AblyOrderItem[] = [
   item("2026-10-26 13:00", 9999, { status: "취소완료" }),
 ];
 
-function fakes(opts: { nowMs: number; repo?: Map<string, unknown>; items?: AblyOrderItem[]; failGet?: boolean; failOrders?: boolean }) {
+function fakes(opts: { nowMs: number; repo?: Map<string, unknown>; items?: AblyOrderItem[]; failGet?: boolean; failOrders?: string; failLogin?: string }) {
   const repo = opts.repo ?? new Map<string, unknown>();
-  const calls = { orders: [] as [string, string][], fees: [] as [string, string][], ad: [] as [string, string][], gets: [] as string[], commits: [] as { paths: string[]; message: string }[], logs: [] as string[] };
+  const calls = { api: [] as string[], orders: [] as [string, string][], fees: [] as [string, string][], ad: [] as [string, string][], costs: 0, gets: [] as string[], commits: [] as { paths: string[]; message: string }[], logs: [] as string[] };
   const items = opts.items ?? ITEMS;
   return {
     repo, calls,
     deps: {
       nowMs: opts.nowMs,
-      orders: async (start: string, end: string) => {
-        calls.orders.push([start, end]);
-        if (opts.failOrders) throw new Error("GET /seller/order_items/ → 500");
-        return items.filter((o) => o.checked_at >= start && o.checked_at <= end);
+      api: async (brand: string) => {
+        calls.api.push(brand);
+        if (opts.failLogin === brand) throw new Error("Missing required env: ABLY_PASSWORD_6A");
+        return {
+          orders: async (start: string, end: string) => {
+            calls.orders.push([start, end]);
+            if (opts.failOrders === brand) throw new Error("GET /seller/order_items/ → 500");
+            return items.filter((o) => o.checked_at >= start && o.checked_at <= end);
+          },
+          feeHistories: async (s: string, e: string) => {
+            calls.fees.push([s, e]);
+            return [{ is_completed: true, scheduled_at: "2026-10-10", payment_amount: 1000000, payment_fees: 44000, platform_fees: 231000, category_fees: 0 }];
+          },
+          adRows: async (from: string, to: string) => {
+            calls.ad.push([from, to]);
+            return [{ datetime: "2026-10-27T00:00:00", charge: 3000, order_price: 9000 }, { datetime: "2026-10-26T00:00:00", charge: 4000, order_price: 0 }];
+          },
+          events: async () => [],
+          coupons: async () => [],
+        };
       },
-      feeHistories: async (s: string, e: string) => {
-        calls.fees.push([s, e]);
-        return [{ is_completed: true, scheduled_at: "2026-10-10", payment_amount: 1000000, payment_fees: 44000, platform_fees: 231000, category_fees: 0 }];
+      loadCosts: async () => {
+        calls.costs++;
+        return [{ name: "Bunny bag", cost: 5000, table: "A" as const }];
       },
-      adRows: async (from: string, to: string) => {
-        calls.ad.push([from, to]);
-        return [{ datetime: "2026-10-27T00:00:00", charge: 3000, order_price: 9000 }, { datetime: "2026-10-26T00:00:00", charge: 4000, order_price: 0 }];
-      },
-      events: async () => [],
-      coupons: async () => [],
-      loadCosts: async () => [{ name: "Bunny bag", cost: 5000, table: "A" as const }],
+      brands: ABLY_BRANDS,
       getJson: async <T,>(path: string) => {
         calls.gets.push(path);
         if (opts.failGet) throw new Error("GitHub GET ably/daily → 502");
@@ -98,7 +110,7 @@ const settledToday = (d: string) => ({ settled: d });
 
 await test("오늘 · 어제 계산 — 주문은 어제 00:00 ~ 지금 한 번, 광고비 기간 한 번, 정산은 달마다 한 번, 커밋 하나", async () => {
   const f = fakes({ nowMs: at("2026-10-27 15:30"), repo });
-  const r = await runAblyLive({ days: null, dry: false, state: settledToday("2026-10-27") }, f.deps);
+  const r = await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-27") }, f.deps);
   assert.deepEqual(r.dates, ["2026-10-27", "2026-10-26"]);
   assert.equal(r.settle, false);
   assert.deepEqual(f.calls.orders, [["2026-10-26 00:00:00", "2026-10-27 15:30:00"]]);
@@ -137,7 +149,7 @@ await test("오늘만 진행 중 표시 (as_of · partial_day) — 보고서와 
 
 await test("숫자가 그대로면 커밋 안 함 (55분 안)", async () => {
   const f = fakes({ nowMs: at("2026-10-27 16:00"), repo });
-  const r = await runAblyLive({ days: null, dry: false, state: settledToday("2026-10-27") }, f.deps);
+  const r = await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-27") }, f.deps);
   assert.equal(f.calls.commits.length, 0);
   assert.deepEqual(r.committed, []);
   assert.ok(f.calls.logs.some((l) => l.includes("바뀐 보고서 없음")));
@@ -145,7 +157,7 @@ await test("숫자가 그대로면 커밋 안 함 (55분 안)", async () => {
 
 await test("55분이 지나면 숫자가 그대로여도 오늘 보고서 시각만 새로 (어제는 안 건드림)", async () => {
   const f = fakes({ nowMs: at("2026-10-27 16:26"), repo });
-  await runAblyLive({ days: null, dry: false, state: settledToday("2026-10-27") }, f.deps);
+  await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-27") }, f.deps);
   assert.equal(f.calls.commits.length, 1);
   assert.deepEqual(f.calls.commits[0].paths.sort(), ["ably/daily/2026-10-27.json", "ably/index.json"]);
   assert.equal((repo.get("ably/daily/2026-10-27.json") as Rep).as_of, "16:26");
@@ -153,7 +165,7 @@ await test("55분이 지나면 숫자가 그대로여도 오늘 보고서 시각
 
 await test("새 주문이 들어오면 오늘만 올림", async () => {
   const f = fakes({ nowMs: at("2026-10-27 16:40"), repo, items: [...ITEMS, item("2026-10-27 16:35", 7000)] });
-  await runAblyLive({ days: null, dry: false, state: settledToday("2026-10-27") }, f.deps);
+  await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-27") }, f.deps);
   assert.deepEqual(f.calls.commits[0].paths.sort(), ["ably/daily/2026-10-27.json", "ably/index.json"]);
   assert.equal((repo.get("ably/daily/2026-10-27.json") as Rep).summary.paid, 47000);
 });
@@ -162,7 +174,7 @@ await test("자정이 지나면 어제(10-27) 보고서는 진행 중 표시 없
   const items = [...ITEMS, item("2026-10-27 16:35", 7000)];
   const f = fakes({ nowMs: at("2026-10-28 00:10"), repo, items });
   // 06시 전이라 하루 한 번 재계산 아님
-  const r = await runAblyLive({ days: null, dry: false, state: settledToday("2026-10-27") }, f.deps);
+  const r = await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-27") }, f.deps);
   assert.equal(r.settle, false);
   assert.deepEqual(r.dates, ["2026-10-28", "2026-10-27"]);
   const d27 = repo.get("ably/daily/2026-10-27.json") as Rep;
@@ -176,25 +188,25 @@ await test("자정이 지나면 어제(10-27) 보고서는 진행 중 표시 없
 
 await test("06시 이후 그날 첫 실행은 지난 8일 — 달이 걸치면 정산은 달마다 한 번 · 이미 했으면 2일", async () => {
   const f = fakes({ nowMs: at("2026-10-03 06:10") });
-  const r = await runAblyLive({ days: null, dry: true, state: settledToday("2026-10-02") }, f.deps);
+  const r = await runAblyLive({ days: null, brands: ["kop"], dry: true, state: settledToday("2026-10-02") }, f.deps);
   assert.equal(r.settle, true);
   assert.equal(r.dates.length, 8);
   assert.equal(r.dates[7], "2026-09-26");
   assert.deepEqual(f.calls.orders, [["2026-09-26 00:00:00", "2026-10-03 06:10:00"]]);
   assert.deepEqual(f.calls.fees.sort(), [["2026-07", "2026-09"], ["2026-08", "2026-10"]]);
-  const before6 = await runAblyLive({ days: null, dry: true, state: settledToday("2026-10-02") }, fakes({ nowMs: at("2026-10-03 05:50") }).deps);
+  const before6 = await runAblyLive({ days: null, brands: ["kop"], dry: true, state: settledToday("2026-10-02") }, fakes({ nowMs: at("2026-10-03 05:50") }).deps);
   assert.equal(before6.dates.length, 2);
-  const done = await runAblyLive({ days: null, dry: true, state: settledToday("2026-10-03") }, fakes({ nowMs: at("2026-10-03 07:00") }).deps);
+  const done = await runAblyLive({ days: null, brands: ["kop"], dry: true, state: settledToday("2026-10-03") }, fakes({ nowMs: at("2026-10-03 07:00") }).deps);
   assert.equal(done.settle, false);
   assert.equal(done.dates.length, 2);
-  const nDays = await runAblyLive({ days: 5, dry: true, state: {} }, fakes({ nowMs: at("2026-10-03 07:00") }).deps);
+  const nDays = await runAblyLive({ days: 5, brands: ["kop"], dry: true, state: {} }, fakes({ nowMs: at("2026-10-03 07:00") }).deps);
   assert.equal(nDays.settle, false, "--days 는 하루 한 번 기록과 상관없음");
   assert.equal(nDays.dates.length, 5);
 });
 
 await test("--dry 는 보고서 레포를 읽지도 쓰지도 않음", async () => {
   const f = fakes({ nowMs: at("2026-10-27 15:30") });
-  await runAblyLive({ days: null, dry: true, state: {} }, f.deps);
+  await runAblyLive({ days: null, brands: ["kop"], dry: true, state: {} }, f.deps);
   assert.equal(f.calls.gets.length, 0);
   assert.equal(f.calls.commits.length, 0);
 });
@@ -202,11 +214,66 @@ await test("--dry 는 보고서 레포를 읽지도 쓰지도 않음", async () 
 await test("GitHub 읽기 실패 · 에이블리 받기 실패면 아무것도 안 올리고 실패", async () => {
   const r1 = new Map(repo);
   const f1 = fakes({ nowMs: at("2026-10-28 09:00"), repo: r1, failGet: true });
-  await assert.rejects(runAblyLive({ days: null, dry: false, state: settledToday("2026-10-28") }, f1.deps), /GitHub GET/);
+  const res1 = await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-28") }, f1.deps);
+  assert.match(res1.failed.join(), /GitHub GET/);
   assert.equal(f1.calls.commits.length, 0);
-  const f2 = fakes({ nowMs: at("2026-10-28 09:00"), repo: r1, failOrders: true });
-  await assert.rejects(runAblyLive({ days: null, dry: false, state: settledToday("2026-10-28") }, f2.deps), /order_items/);
+  const f2 = fakes({ nowMs: at("2026-10-28 09:00"), repo: r1, failOrders: "kop" });
+  const res2 = await runAblyLive({ days: null, brands: ["kop"], dry: false, state: settledToday("2026-10-28") }, f2.deps);
+  assert.match(res2.failed.join(), /order_items/);
   assert.equal(f2.calls.commits.length, 0);
+});
+
+await test("아페티 · 식스에이 — ably/apt · ably/6a 경로, 원가 미반영(cost null · 순이익에 원가 안 뺌), 원가 시트 안 읽음", async () => {
+  const r = new Map<string, unknown>();
+  const f = fakes({ nowMs: at("2026-10-27 15:30"), repo: r });
+  const res = await runAblyLive({ days: null, brands: ["apt", "6a"], dry: false, state: settledToday("2026-10-27") }, f.deps);
+  assert.deepEqual(res.failed, []);
+  assert.equal(f.calls.costs, 0, "원가 시트 안 읽음");
+  assert.deepEqual(f.calls.api, ["apt", "6a"]);
+  assert.equal(f.calls.commits.length, 1, "두 마켓 커밋 하나");
+  assert.deepEqual(f.calls.commits[0].paths.sort(), [
+    "ably/6a/daily/2026-10-26.json", "ably/6a/daily/2026-10-27.json", "ably/6a/index.json",
+    "ably/apt/daily/2026-10-26.json", "ably/apt/daily/2026-10-27.json", "ably/apt/index.json",
+  ]);
+  const d = r.get("ably/apt/daily/2026-10-27.json") as Rep & { market: string };
+  assert.equal(d.market, "아페티");
+  assert.equal((r.get("ably/6a/daily/2026-10-27.json") as { market: string }).market, "식스에이");
+  assert.equal(d.summary.cost, null);
+  assert.equal(d.summary.cost_missing_items, 0);
+  assert.match(String(d.assumptions.cost_basis), /원가 미반영/);
+  assert.equal(d.summary.net, d.summary.settle_est - d.summary.shipping - d.summary.ad_spend, "순이익 = 정산 − 배송비 − 광고비");
+  assert.ok(d.orders.every((o) => o.cost_unit === null && o.cost === 0));
+  assert.equal(d.as_of, "15:30");
+  assert.deepEqual((r.get("ably/apt/index.json") as Idx).days.map((x) => [x.date, x.as_of]), [["2026-10-27", "15:30"], ["2026-10-26", undefined]]);
+  assert.equal(((r.get("ably/apt/index.json") as { days: { cost: unknown }[] }).days[0]).cost, null, "index 줄도 원가 null (오피스 '원가 전')");
+});
+
+await test("마켓 하나가 실패해도(로그인 설정 없음) 나머지는 올림 · 하루 한 번 재계산은 끝난 걸로 안 침", async () => {
+  const r = new Map<string, unknown>();
+  const f = fakes({ nowMs: at("2026-10-28 06:30"), repo: r, failLogin: "6a" });
+  const res = await runAblyLive({ days: null, brands: ["kop", "apt", "6a"], dry: false, state: settledToday("2026-10-27") }, f.deps);
+  assert.equal(res.settle, true);
+  assert.equal(res.failed.length, 1);
+  assert.match(res.failed[0], /식스에이: Missing required env: ABLY_PASSWORD_6A/);
+  assert.equal(f.calls.commits.length, 1);
+  const paths = f.calls.commits[0].paths;
+  assert.ok(paths.includes("ably/index.json") && paths.includes("ably/apt/index.json"));
+  assert.ok(!paths.some((p) => p.startsWith("ably/6a/")), "실패한 마켓 파일은 없음");
+  assert.equal(settleDone(res, ["kop", "apt", "6a"], false), false, "실패가 있으면 30분 뒤 다시 8일");
+  const ok = await runAblyLive({ days: null, brands: ["kop", "apt", "6a"], dry: false, state: settledToday("2026-10-27") }, fakes({ nowMs: at("2026-10-28 07:00"), repo: r }).deps);
+  assert.equal(settleDone(ok, ["kop", "apt", "6a"], false), true);
+  assert.equal(settleDone(ok, ["kop"], false), false, "일부 마켓만 돌린 건 끝난 걸로 안 침");
+  assert.equal(settleDone(ok, ["kop", "apt", "6a"], true), false, "--dry 도");
+});
+
+await test("원가 시트를 못 읽으면 코페리만 실패 — 아페티는 그대로 올림", async () => {
+  const r = new Map<string, unknown>();
+  const f = fakes({ nowMs: at("2026-10-27 15:30"), repo: r });
+  f.deps.loadCosts = async () => { throw new Error("원가 Product List 탭을 못 읽음"); };
+  const res = await runAblyLive({ days: null, brands: ["kop", "apt"], dry: false, state: settledToday("2026-10-27") }, f.deps);
+  assert.equal(res.failed.length, 1);
+  assert.match(res.failed[0], /^코페리/);
+  assert.ok(f.calls.commits[0].paths.every((p) => p.startsWith("ably/apt/")));
 });
 
 console.log("\n에이블리 API (ably-api)");
@@ -323,6 +390,22 @@ await test("주문은 페이지를 넘겨 다 받고 total-count 로 확인 · �
   const short = fakeAbly({ items: raw.slice(0, 50), total: 80 });
   await assert.rejects(withFetch(short.fetchImpl, async () => fetchOrders(await ablyLogin(), "2026-10-27 00:00:00", "2026-10-27 23:59:59")), /건수가 안 맞아요/);
   assert.deepEqual(Object.keys(pickOrderItem({ sno: 1, buyer_name: "x" })).includes("buyer_name"), false);
+});
+
+await test("마켓별 계정(envSuffix) — ABLY_EMAIL_APT 로 로그인 · 토큰 파일 따로 · 계정 설정이 없으면 그 마켓만 오류", async () => {
+  process.env.ABLY_EMAIL_APT = "apt@example.com";
+  process.env.ABLY_PASSWORD_APT = "apw";
+  const file = join(tmp, "apt-token.json");
+  const calls: Record<string, unknown>[] = [];
+  const f = (async (url: string, init?: { body?: string }) => {
+    if (init?.body) calls.push(JSON.parse(init.body));
+    if (new URL(url).pathname === "/seller/login/") return new Response(JSON.stringify({ access_token: jwt(3600), refresh_token: jwt(86400 * 7) }));
+    return new Response("{}");
+  }) as typeof fetch;
+  await withFetch(f, async () => (await ablyLogin({ envSuffix: "_APT", tokenFile: file })).get("/seller/coupons/"));
+  assert.deepEqual(calls[0], { email: "apt@example.com", password: "apw" });
+  assert.ok(statSync(file).isFile());
+  await assert.rejects(ablyLogin({ envSuffix: "_6A", tokenFile: join(tmp, "6a.json") }), /ABLY_EMAIL_6A/);
 });
 
 console.log(`\n결과: 통과 ${pass}${process.exitCode ? " · 실패 있음" : " · 실패 0"}`);
