@@ -5,7 +5,8 @@
  *   전 마켓 합쳐 커밋 하나로 올린다 (dir: 코페리 ably · 아페티 ably/apt · 식스에이 ably/6a — src/ably-brands.ts).
  *   하루 한 번(06시 이후 첫 실행)은 지난 8일을 다시 계산 — 늦은 취소 · 반품, 정산 수수료율 변화 반영.
  * 공홈 실시간(src/home-live.ts)과 같은 구조. 받기는 src/ably-api.ts, 계산은 src/ably-report.ts 로 매일 07:10 수집기(src/ably-daily.ts)와 똑같다.
- * 원가 시트는 코페리만 — 아페티 · 식스에이는 원가 미반영 보고서 (summary.cost = null, 오피스 "원가 미반영").
+ * 원가: 코페리 = 코페리 원가 시트(deps.loadCosts) · 아페티 = MD팀 아페티 시트(공홈과 같은 표, src/ably-brands.ts cost) ·
+ *   식스에이 = 원가 미반영 보고서 (summary.cost = null, 오피스 "원가 미반영").
  * 규칙: docs/ABLY-API.md "실시간 (30분마다)". 시험: tests/ably-live.test.ts
  *
  * 사용법:
@@ -53,7 +54,7 @@ export interface AblyLiveDeps {
   nowMs: number;
   /** 마켓 id → API (로그인은 처음 부를 때 — 계정 설정이 없으면 그 마켓만 실패) */
   api: (brand: string) => Promise<AblyMarketApi>;
-  /** 원가 시트 — 원가를 쓰는 마켓(코페리)이 있을 때만 부름 */
+  /** 코페리 원가 시트 — 그 시트를 쓰는 마켓(코페리)이 있을 때만 부름. 아페티처럼 brands[id].cost 가 있는 마켓은 그쪽 load */
   loadCosts: () => Promise<CostRow[]>;
   /** 보고서 레포 파일 읽기 (없으면 null, 그 밖의 오류는 던짐) · 여러 파일 한 커밋 */
   getJson: <T>(path: string) => Promise<T | null>;
@@ -90,7 +91,7 @@ export async function runAblyLive(args: AblyLiveArgs, deps: AblyLiveDeps): Promi
   const months = [...new Set(dates.map((d) => d.slice(0, 7)))];
   deps.log(`[ably-live] ${today} ${asOf} · ${oldest} ~ ${today} (${nDays}일${settle ? " — 하루 한 번 지난 날 다시 계산" : ""}) · ${args.brands.join(", ")}${args.dry ? " · 시험(기록 안 함)" : ""}`);
 
-  // 원가 시트는 한 번만 (원가를 쓰는 마켓이 있을 때)
+  // 코페리 원가 시트는 한 번만 (그 시트를 쓰는 마켓이 있을 때)
   let costs: Promise<CostRow[]> | null = null;
   const files: { path: string; content: unknown }[] = [];
   const committed: string[] = [];
@@ -101,13 +102,14 @@ export async function runAblyLive(args: AblyLiveArgs, deps: AblyLiveDeps): Promi
     try {
       const api = await deps.api(id);
       // 한 번에: 주문은 가장 오래된 날 00:00 ~ 지금 (받는 동안 새 주문에 페이지가 밀리지 않게 끝을 고정), 정산은 필요한 달마다, 나머지는 한 번
-      const [items, feeList, adRows, events, coupons, costRows] = await Promise.all([
+      const [items, feeList, adRows, events, coupons, costRows, costMatcher] = await Promise.all([
         api.orders(`${oldest} 00:00:00`, nowKst),
         Promise.all(months.map((m) => { const w = feeWindow(`${m}-01`); return api.feeHistories(w.startMonth, w.endMonth); })),
         api.adRows(oldest, today),
         api.events(),
         api.coupons(),
-        cfg.costs ? (costs ??= deps.loadCosts()) : Promise.resolve([] as CostRow[]),
+        cfg.costs && !cfg.cost ? (costs ??= deps.loadCosts()) : Promise.resolve([] as CostRow[]),
+        cfg.costs ? cfg.cost?.load() : undefined,
       ]);
       const fees = Object.fromEntries(months.map((m, i) => [m, feeList[i]]));
 
@@ -119,7 +121,7 @@ export async function runAblyLive(args: AblyLiveArgs, deps: AblyLiveDeps): Promi
           date,
           { items: ordersOn(items, date), fee: feeRateFrom(fees[date.slice(0, 7)], date), ad: adOn(adRows, date), events: eventsOn(events, date), coupons: couponsAsOf(coupons, date) },
           costRows,
-          { market: cfg.name, costUnavailable: !cfg.costs },
+          { market: cfg.name, costUnavailable: !cfg.costs, costMatcher, costBasis: cfg.cost?.basis },
         );
         built.generated_at = new Date(deps.nowMs).toISOString();
         const partial = date === today;

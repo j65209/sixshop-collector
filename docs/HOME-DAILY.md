@@ -124,8 +124,10 @@ env (맥미니 `~/brightbeed-auto/sixshop-collector/.env`): `SIXSHOP_EMAIL_KOP` 
 한글 색상 · 번호 범위(2-6). 아페티 옵션 표기 별칭(`APETI_ALIASES`) · Bold ORION 특례는 `home-daily.ts`.
 2026-09 ~ 10 주문(아페티 4,557개 · 코즈미 871개)으로 잰 결과: 아페티 전부 확인(기존 방식 미확인 1,297개), 코즈미 미확인 0 · 기본값 3.
 새 옵션 표기가 나오면 보고서에 "미확인"으로 뜬다 → 별칭 추가.
+에이블리 아페티 보고서(`src/ably-live.ts`)도 같은 표(`loadApetiCosts`)를 쓴다 — 옵션 표기가 달라 `matchCostAbly`(docs/ABLY-API.md). Product List 원가가 100개 미만이면 시트 고장으로 보고 실패.
 
-MD팀 확인할 것: 아페티 플랫폼 세트 탭 White/Matt ORION 값이 한 칸씩 밀림(Product List 값을 씀) · con ring 은 플랫폼 세트에만 900원 · tid ring 0원.
+MD팀 확인할 것: 아페티 플랫폼 세트 탭 White/Matt ORION 값이 한 칸씩 밀림(Product List 값을 씀) · con ring 은 플랫폼 세트에만 900원 · tid ring 0원 ·
+"오리온 set" 줄 ￥10.06(3,018원) ≠ ORION A·B·C 합 ￥9.73(2,919원) — 공홈 · 에이블리 모두 부품 합을 씀.
 코즈미 Product List ↔ 발주 리스트 위안이 다른 5개(Seastar · Green Orb · White Pearl · Candy · Pearl beads 블랙 — 행이 밀려 복사된 듯).
 
 ## 프로덕트피알 · 아코이하우스 · 클리어타입 원가 (2026-10-28 추가)

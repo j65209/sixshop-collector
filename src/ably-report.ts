@@ -1,11 +1,11 @@
 /**
  * 에이블리 하루 보고서 계산 — 네트워크 없음. 받기는 src/ably-api.ts, 실행은 src/ably-daily.ts(매일) · src/ably-live.ts(30분마다).
- *   순이익 = 정산 추정액 − 배송비(주문번호당 2,200원) − 에이블리 광고비 − 원가(src/ably-cost.ts, 원가 시트 매칭)
+ *   순이익 = 정산 추정액 − 배송비(주문번호당 2,200원) − 에이블리 광고비 − 원가(src/ably-cost.ts 원가 시트 매칭 · 아페티는 opts.costMatcher)
  * 양식 · 규칙은 docs/ABLY-API.md. 구매자 이름 · 연락처 · 주소 · 메모는 담지 않는다 (주문은 AblyOrderItem 필드만).
  *
  * env (선택): ABLY_MARKET_NAME(기본 코페리) · ABLY_SHIPPING_COST(기본 2200)
  */
-import { matchCost, type CostRow } from "./ably-cost.js";
+import { matchCost, type CostMatch, type CostRow } from "./ably-cost.js";
 import type { AblyAdRow, AblyCoupon, AblyEvent, AblyOrderItem, SettlementHistory } from "./ably-api.js";
 
 const SHIPPING_COST = Number(process.env.ABLY_SHIPPING_COST ?? 2200);
@@ -97,7 +97,8 @@ export function couponsAsOf(list: AblyCoupon[], date: string) {
 /** 원가 시트를 아직 연결하지 않은 마켓 — 공홈 원가 없는 브랜드(home-report-pro costUnavailable)와 같은 표시 */
 const NO_COST_BASIS = "원가 미반영 — 이 마켓 원가 시트 연결 전 (순이익에서 원가를 빼지 않음)";
 
-/** 받아 온 데이터로 하루 보고서 계산. opts.market 기본은 ABLY_MARKET_NAME(코페리), costUnavailable 이면 원가 미반영 */
+/** 받아 온 데이터로 하루 보고서 계산. opts.market 기본은 ABLY_MARKET_NAME(코페리), costUnavailable 이면 원가 미반영,
+ *  costMatcher · costBasis 가 있으면 costRows(코페리 원가 시트) 대신 그 원가 찾기 (아페티 — src/ably-brands.ts) */
 export function buildAblyReport(
   date: string,
   d: {
@@ -108,7 +109,12 @@ export function buildAblyReport(
     coupons: ReturnType<typeof couponsOn>;
   },
   costRows: CostRow[],
-  opts: { market?: string; costUnavailable?: boolean } = {},
+  opts: {
+    market?: string;
+    costUnavailable?: boolean;
+    costMatcher?: (goodsName: string, goodsCode: string, option: string) => CostMatch;
+    costBasis?: string;
+  } = {},
 ) {
   const { items, fee, ad, events, coupons } = d;
   const noCost = !!opts.costUnavailable;
@@ -117,7 +123,7 @@ export function buildAblyReport(
     const discount = (o.exact_coupon_discount || 0) + (o.exact_emoney_discount || 0) + (o.exact_pay_benefit_discount || 0);
     const cm = noCost
       ? { cost_unit: null, cost_name: null, cost_match: null }
-      : matchCost(costRows, o.goods_name ?? "", o.goods_custom_code ?? "", o.option_info ?? "");
+      : (opts.costMatcher ?? ((n, c, op) => matchCost(costRows, n, c, op)))(o.goods_name ?? "", o.goods_custom_code ?? "", o.option_info ?? "");
     return {
       sno: o.sno,
       order_sno: o.order_sno,
@@ -168,7 +174,7 @@ export function buildAblyReport(
       shipping_cost_per_order: SHIPPING_COST,
       fee_rate: Number(fee.rate.toFixed(4)),
       fee_basis: fee.basis,
-      cost_basis: noCost ? NO_COST_BASIS : "원가 시트(기획전 계산기 시트) E열 → 없으면 Q열, 상품명·옵션으로 매칭",
+      cost_basis: noCost ? NO_COST_BASIS : opts.costBasis ?? "원가 시트(기획전 계산기 시트) E열 → 없으면 Q열, 상품명·옵션으로 매칭",
       date_basis: "결제일(checked_at)",
       excluded_status: "취소·반품·환불 상태는 매출에서 제외",
     },

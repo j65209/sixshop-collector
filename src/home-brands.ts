@@ -3,7 +3,7 @@
  * id 는 오피스 BRAND_SECTIONS 와 같게 (전략팀 공홈 카드가 brightbeed-reports 의 home/{id} 를 읽음).
  */
 import { fetchCsv, loadCostRows, loadCostTables, matchCost, parseCsv, type CostMatch, type CostRow, type CostTable } from "./ably-cost.js";
-import { costBook, matchCostV2, type CostBookOptions } from "./cost-match.js";
+import { costBook, matchCostV2, type CostAlias, type CostBookOptions } from "./cost-match.js";
 import { OFFICE_RAW } from "./home-ad.js";
 
 // 결제수수료 추정 — 실제 요율 확인 전 가정값 (식스샵 자체 결제 · 네이버페이 주문형 따로)
@@ -48,13 +48,20 @@ const APETI_COSTS: SheetTab[] = [
   { gid: "390277054", nameCol: 2, costCol: 5, skip: 1 }, // 공홈 가격 수정 표 — 공홈 SET 줄 · "(재등록)" 없는 이름 보충
   { gid: "141680769", nameCol: 2, costCol: 5, skip: 1 }, // 플랫폼 세트 — con ring 등 보충 (ORION 값이 한 칸씩 밀려 있어 맨 뒤)
 ];
+/** 아페티 원가 표 — 공홈 · 에이블리(src/ably-brands.ts) 같이 씀. Product List 가 거의 비면(공개 해제 · 열 이동) 보고서를 "미확인"으로 덮지 않게 실패 */
+export async function loadApetiCosts(): Promise<CostRow[]> {
+  const rows = await loadCostTables(sheetTables(APETI_SHEET, APETI_COSTS));
+  const base = rows.filter((r) => r.table === "A").length;
+  if (base < 100) throw new Error(`MD팀 아페티 시트 Product List 에서 원가를 ${base}개밖에 못 읽음 (2026-10 기준 200개 넘음)`);
+  return rows;
+}
 const KOZMI_SHEET = "1TS-HqffOap11AdGwiffMr38KwHAUq1fmcjmmBPdKLMU";
 const KOZMI_COSTS: SheetTab[] = [
   { gid: "1819637012", nameCol: 2, costCol: 5, skip: 1 }, // Product List
   { gid: "59467872", nameCol: 0, costCol: 1, skip: 1 }, // 50%할인이벤트 — A 상품명 · B 공급가 ("drop set" 보충)
 ];
 // 아페티 공홈 옵션 · SET 표기 → 시트 이름 (2026-09 ~ 10 주문에 실제로 나온 표기). 새 표기가 나오면 보고서에 "미확인"으로 뜸
-const APETI_ALIASES: CostBookOptions["aliases"] = [
+export const APETI_ALIASES: CostAlias[] = [
   [/baby\s*-?\s*a\s*\+\s*b/i, "Baby ring-A + Baby ring-B"],
   [/baby\s*-\s*a\b/i, "Baby ring-A"],
   [/baby\s*-\s*b\b/i, "Baby ring-B"],
@@ -179,7 +186,7 @@ export const HOME_BRANDS: Record<string, HomeBrand> = {
   apt: {
     name: "아페티", credEnvSuffix: "_APT", proStore: "apeti", liveSince: "2026-10-22",
     costBasis: "MD팀 아페티 시트 — Product List → 공홈 가격 수정 표 → 플랫폼 세트 F열(공급가), 옵션에 고른 반지·목걸이까지 읽어 매칭",
-    loadCosts: () => loadCostTables(sheetTables(APETI_SHEET, APETI_COSTS)),
+    loadCosts: loadApetiCosts,
     costMatch: { aliases: APETI_ALIASES, special: apetiSpecial },
   },
   koz: {

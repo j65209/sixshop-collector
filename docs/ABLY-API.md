@@ -82,12 +82,18 @@
 | 마켓 | 레포 경로 | 오피스 카드 | env (.env) | 광고 마켓 번호 | 원가 |
 |---|---|---|---|---|---|
 | 코페리 | `ably/` (처음 만든 경로) | 플랫폼 탭 `ably-kop` | `ABLY_EMAIL` · `ABLY_PASSWORD` · `ABLY_AD_MARKET_SNO` | 46903 | 원가 시트 매칭 |
-| 아페티 | `ably/apt/` | `ably-apt` | 같은 이름 + `_APT` | 60636 | **미반영** |
+| 아페티 | `ably/apt/` | `ably-apt` | 같은 이름 + `_APT` | 60636 | MD팀 아페티 시트 (2026-10-29~, 아래) |
 | 식스에이 | `ably/6a/` | `ably-6a` | 같은 이름 + `_6A` | 22249 | **미반영** |
 
 - 광고 마켓 번호는 2026-10-28 `statistics_timeseries` 7일 합 = `dashboard/ad_performance.ad_spend` 로 확인. 계정은 맥미니 `~/projects/ably-collector/.env` 와 같다.
-- 원가 미반영 마켓: `summary.cost = null` · `assumptions.cost_basis` "원가 미반영", 순이익 = 정산 추정 − 배송비 − 광고비 (원가 안 뺌). 오피스는 "원가 미반영" · "(원가 전)"으로 띄운다.
-  원가 시트를 붙이려면 `src/ably-brands.ts` 의 `costs` 를 true 로 하고 `src/ably-cost.ts` 에 그 마켓 시트를 연결.
+- 원가 미반영 마켓(식스에이): `summary.cost = null` · `assumptions.cost_basis` "원가 미반영", 순이익 = 정산 추정 − 배송비 − 광고비 (원가 안 뺌). 오피스는 "원가 미반영" · "(원가 전)"으로 띄운다.
+  원가를 붙이려면 `src/ably-brands.ts` 의 `costs` 를 true 로 하고, 코페리 시트가 아니면 `cost`(근거 문구 · 원가 찾기 load)를 단다.
+- 아페티 원가: 공홈 보고서와 같은 MD팀 아페티 시트(`loadApetiCosts` — Product List → 공홈 가격 수정 표 → 플랫폼 세트 F열 공급가, docs/HOME-DAILY.md "아페티 · 코즈미 원가").
+  에이블리 옵션은 "키: 값" 없이 값만 `/` 로 와서 `src/cost-match.ts` `matchCostAbly` 로 읽는다 — 첫 칸 구매 형식(`1+1` 두 개 · `단품` 첫 상품만),
+  고른 반지 합(`Frost/Veil` · `H ring/+R-06`, ring 뗀 이름은 붙여서), 세트 별칭(`07.08set` · `Baby set` · `오리온 SET (A+B+C)` 등 `APETI_ABLY_ALIASES`),
+  `OPEN RING` · `free` · `silver` 칸은 건너뜀, 옵션에 상품이 없으면 상품명(홍보 문구 · [태그] 뗀 것)에서 하나만 찾힐 때.
+  옵션 값은 `+` 조각마다 시트 이름 **전체**와 같아야 한다(이름 일부만 맞아도 되는 2판 scan 을 안 씀) — 조각 하나라도 모르면 그 주문은 "미확인".
+  2026-08-28 ~ 10-29 에이블리 주문 134가지 표기 · 723개 전부 확인. 새 표기가 나오면 보고서에 "미확인"으로 뜬다 → 별칭 추가.
 - 마켓 하나가 실패해도(계정 · 받기 · 레포 읽기) 나머지는 올리고 종료 코드 1. 실패한 마켓 파일은 하나도 안 건드린다.
 - 새 마켓 지난 기간 채우기: `npm run ably-live -- --brands apt,6a --days 62` (최대 92일, 2026-10-28 에 8/28 ~ 10/28 을 이렇게 채움).
 06시 이후 그날 첫 실행은 **지난 8일**을 다시 계산 — 늦은 취소 · 반품 (상태 `~/brightbeed-auto/state/ably-live.json` `{settled}`, 실패 없을 때만 기록).
@@ -103,7 +109,7 @@ npm run ably-live -- --dry        # 계산만 — 레포 · 상태 파일 · 토
   정산 `histories` 는 필요한 달마다(`feeWindow`), 광고비 `statistics_timeseries` 는 기간 한 번, 기획전 · 쿠폰은 한 번. 로그인은 거의 안 함(토큰 저장 · refresh).
 - 오늘 보고서에는 `as_of`(계산 시각 HH:MM, KST) · `assumptions.partial_day: true` — index.json 줄에도 `as_of`. 자정이 지나면 그날은 `as_of` 없이 다시 올라간다.
   숫자가 그대로면 안 올리지만 55분이 지나면 오늘 파일 시각만 새로 올림. 지난 날짜 쿠폰은 그날 이후 시작한 것을 뺀다 (`couponsAsOf`).
-- 실패 처리: 에이블리 · GitHub 읽기 · 원가 시트(보충 탭 포함) 중 하나라도 실패하면 **아무것도 덮지 않고** 종료 코드 1 (`ghGetJson` 은 404 만 "없음").
+- 실패 처리: 에이블리 · GitHub 읽기 · 원가 시트(보충 탭 포함, 아페티는 Product List 원가 100개 미만도) 중 하나라도 실패하면 그 마켓은 **아무것도 덮지 않고** 종료 코드 1 (`ghGetJson` 은 404 만 "없음")
 - env: 위 표의 마켓별 값 · `REPORTS_GITHUB_TOKEN`. 토큰 파일은 마켓마다 (`ably-token.json` · `ably-token-apt.json` · `ably-token-6a.json`).
   같은 계정으로 따로 로그인해도 다른 세션(셀러 어드민 화면 · ably-collector)은 안 끊긴다 (2026-10-28 확인). 시험: `npx tsx tests/ably-live.test.ts` (네트워크 · 계정 없이).
 - 매일 07:10 `ably-daily`(어제 하루 + 구글시트)는 그대로 둔다 — 같은 날짜 파일을 같은 계산으로 다시 쓰는 것이라 충돌 없음.

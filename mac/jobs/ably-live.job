@@ -1,5 +1,5 @@
 # 에이블리 실시간 보고서 (코페리 · 아페티 · 식스에이) — 오늘(진행 중) · 어제 보고서를 30분마다 다시 계산해 바뀐 것만
-# 비공개 레포 brightbeed-reports 의 ably/ (코페리) · ably/apt/ · ably/6a/ 에 올림. 원가는 코페리만 (나머지는 원가 미반영).
+# 비공개 레포 brightbeed-reports 의 ably/ (코페리) · ably/apt/ · ably/6a/ 에 올림. 원가는 코페리 · 아페티(MD팀 아페티 시트), 식스에이는 원가 미반영.
 # 06시 이후 첫 실행은 지난 8일을 다시 계산 (늦은 취소 · 반품). 오피스 전략팀 → 플랫폼 탭 "{마켓} · 에이블리"가 as_of 를 보고 "오늘 HH:MM 기준"을 띄운다.
 # 계산 · 규칙은 docs/ABLY-API.md "실시간 (30분마다)" (src/ably-live.ts). 매일 07:10 ably-daily(구글시트 기록)는 따로 그대로.
 DESC=에이블리 실시간 보고서 (코페리 · 아페티 · 식스에이)
@@ -8,4 +8,4 @@ EVERY_MIN=30
 REQUIRES=ABLY_EMAIL ABLY_PASSWORD ABLY_AD_MARKET_SNO ABLY_EMAIL_APT ABLY_PASSWORD_APT ABLY_AD_MARKET_SNO_APT ABLY_EMAIL_6A ABLY_PASSWORD_6A ABLY_AD_MARKET_SNO_6A REPORTS_GITHUB_TOKEN
 TIMEOUT_MIN=20
 # RUN_NOW: 값을 바꿔 올리면 맥미니가 다음 확인 때(15분 안) 한 번 바로 실행 — 맥에 가지 않고 시험할 때
-RUN_NOW=2026-10-28 아페티 · 식스에이 추가
+RUN_NOW=2026-10-29 아페티 원가 연결

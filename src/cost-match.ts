@@ -1,5 +1,6 @@
 /**
- * 원가 매칭 2판 — 공홈(식스샵 프로) 아페티 · 코즈미용. 코페리 · 에이블리는 src/ably-cost.ts matchCost 그대로.
+ * 원가 매칭 2판 — 공홈(식스샵 프로) 아페티 · 코즈미용. 코페리(공홈 · 에이블리)는 src/ably-cost.ts matchCost 그대로,
+ * 에이블리 아페티는 같은 시트 색인에 옵션만 에이블리 표기로 읽는 matchCostAbly (이 파일 맨 아래).
  *
  * 두 브랜드 공홈은 상품 하나에 옵션으로 실제 상품을 고르는 묶음 · 선택형이 많다:
  *   "Twinkle ring | 구매형식: 2개 구매 | Ring: Layer ring | 추가 Ring: Rose ring"  → Layer ring + Rose ring
@@ -125,7 +126,7 @@ function scan(book: CostBook, text: string): BookRow[] {
       got.push(book.all.get(k)!);
     }
   }
-  if (got.length === 1 && /1\s*\+\s*1/.test(v)) got.push(got[0]); // "Ripple ring 1+1"
+  if (got.length === 1 && /1\s*\+\s*1/.test(v) && !/1\s*\+\s*1/.test(got[0].name)) got.push(got[0]); // "Ripple ring 1+1" (시트 "OL 1+1" 줄은 이미 두 개)
   return got;
 }
 
@@ -208,4 +209,74 @@ export function matchCostV2(book: CostBook, goodsName: string, goodsCode: string
   if (!best) return { cost_unit: null, cost_name: null, cost_match: "none" };
   const exact = best.unmatched === 0 && (best.matched > 0 || variants === 0);
   return { cost_unit: best.row.cost, cost_name: clean(best.row.name), cost_match: exact ? "exact" : "base" };
+}
+
+/* ---------------- 에이블리 옵션 (아페티) ---------------- */
+
+/**
+ * 에이블리 옵션은 "키: 값" 없이 옵션 그룹 값만 "/" 로 이어 온다 (2026-08 ~ 10 에이블리 아페티 주문 134가지 표기로 맞춤):
+ *   "1+1/Twinkle ring/Layer ring" → 첫 칸 구매 형식 + 고른 반지 둘의 합 · "단품/Layer ring/없음" → 첫 상품만
+ *   "H ring/+R-06" · "Frost/Veil" → 고른 두 반지 합 ("+" = 추가 상품, "Frost" 처럼 ring 을 뗀 이름은 붙여서 찾음)
+ *   "07.08set/OPEN RING" · "queen ring set/free" → 세트는 별칭으로 구성 상품 합 · "OPEN RING" · "free" · "silver" 같은 칸은 건너뜀
+ *   "N - Daisy + Dolly ring SET" → "+" 조각마다 시트 이름 전체와 같아야 (끝 "SET" 뗌) — 조각 하나라도 모르면 그 값은 못 읽은 것
+ *   "silver/." · "1+1/free" → 옵션에 상품이 없으면 상품명(✨…✨ 같은 홍보 문구 · [태그] 뗀 것)에서 찾음, "1+1" 이면 두 개
+ * 옵션 값은 이름 일부만 맞아도 되는 2판 scan 을 쓰지 않는다 — "Cross" 가 "Cross set" 줄로, "Mystery + Dolly ring" 이 Dolly 하나로 잡히지 않게.
+ * 상품명에서 찾을 때는 시트 상품이 딱 하나일 때만, 못 읽은 옵션 값("Drop")은 그 이름("N - Drop")에 다 들어 있을 때만 인정.
+ * 그 밖에 못 읽은 칸이 하나라도 있으면 "none"(보고서 "미확인") — 짐작으로 채우지 않는다.
+ */
+const ABLY_SKIP = /^(|\.|free|open\s*ring|openring|silver|선택\s*없음|없음)$/i;
+const ABLY_BUY = /^(단품|\d+(\s*\+\s*\d+)+)$/;
+const PROMO = /(\p{Extended_Pictographic}[\p{Extended_Pictographic}\u200d\ufe0f]*).*?\1/gu;
+
+// 이름 전체가 같은 시트 행 ("X set" 줄에서 만든 짧은 이름 · "set" · "1+1" 같은 줄은 안 봄)
+function ablyRow(book: CostBook, name: string): BookRow | undefined {
+  const k = keyOf(name);
+  const row = book.all.get(k);
+  return row && !GENERIC.test(k) ? row : undefined;
+}
+
+/** 옵션 값 하나 → 시트 행들: 별칭 → "+" 조각마다 시트 이름 전체 (끝 "set" 뗌, ring 뗀 이름은 붙여서). 한 조각이라도 모르면 null */
+function ablyValue(book: CostBook, value: string): BookRow[] | null {
+  const alias = (book.opts.aliases ?? []).find(([re]) => re.test(value));
+  const rows: BookRow[] = [];
+  for (const part of (alias ? value.replace(alias[0], alias[1]) : value).split("+")) {
+    const p = part.replace(/\bset\s*$/i, "").trim();
+    const row = p ? ablyRow(book, p) ?? (/\bring\b/i.test(p) ? undefined : ablyRow(book, `${p} ring`)) : undefined;
+    if (!row) return null;
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function matchCostAbly(book: CostBook, goodsName: string, goodsCode: string, option: string): CostMatch {
+  const special = fromSpecial(book, goodsName, option);
+  if (special) return sumOf(special);
+  const values = option.split("/").map((v) => v.trim());
+  const buy = ABLY_BUY.test(values[0] ?? "") ? values.shift()! : "";
+  const units = buy && buy !== "단품" ? buy.split("+").reduce((n, x) => n + Number(x), 0) : 1;
+  const picked: BookRow[] = [];
+  const unread: string[] = [];
+  for (const raw of values) {
+    const v = raw.replace(/^\+\s*/, "");
+    if (ABLY_SKIP.test(v)) continue;
+    const rows = ablyValue(book, v);
+    if (!rows) {
+      unread.push(v);
+      continue;
+    }
+    picked.push(...rows);
+    if (buy === "단품") break;
+  }
+  const none: CostMatch = { cost_unit: null, cost_name: null, cost_match: "none" };
+  if (picked.length) return unread.length ? none : sumOf(picked.length === 1 ? Array(units).fill(picked[0]) : picked);
+
+  const bare = `${goodsName.replace(PROMO, " ").replace(/\[[^\]]*\]/g, " ")} ${goodsCode}`;
+  const named = scan(book, bare);
+  const row = named[0];
+  if (!row || named.some((r) => r !== row)) return none;
+  // "Twinkle Flower Layer Rose white heart ring" 처럼 ring 을 뗀 시트 상품이 더 적힌 묶음 상품명 — 하나로 짐작하지 않음
+  if (costWords(bare).some((w) => !row.words.includes(w) && ablyRow(book, `${w} ring`))) return none;
+  if (!unread.every((v) => costWords(v).every((w) => row.words.includes(w)))) return none;
+  // 구매 형식 칸이 있으면 그 개수 (홍보 문구가 덜 떼어져 이름에 남은 "1+1" 보다 우선), 없으면 이름의 "1+1"
+  return sumOf(Array(buy ? units : named.length).fill(row));
 }
