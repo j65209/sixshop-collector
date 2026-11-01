@@ -63,6 +63,7 @@ GHA cron → 식스샵 raw 시트 (hidden)
 | `npm run sync-ss` | (PP 전용) SS 주문 sync |
 | `npm run vm-pp-cycle` | (PP 전용) sync-ss + refresh-pp-master |
 | `npm run setup-pp-mapping` | (PP 전용) 매핑 시트 셋업 |
+| `npm run export-pro-orders -- --month YYYY-MM` | 식스샵 프로 한 달 주문 → 비공개 보고서 레포 (개인정보 없이, [`docs/HOME-DAILY.md`](docs/HOME-DAILY.md)) |
 | `npm run build` | TypeScript 컴파일 |
 
 ## 🤖 Claude Code 활용

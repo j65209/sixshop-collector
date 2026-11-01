@@ -87,6 +87,22 @@ discountAmount, totalDiscountAmount, refundAmount, types, items:[{poid, name, op
   네이버페이 주문형은 옮겨 오지 않았다. 주문번호 16자리 숫자 = 네이버페이, 12자리 영숫자 = 프로 자사몰.
   → 그 기간은 프로 데이터로 만들지 않고 구 식스샵 주문 엑셀(`--xlsx`)로 채운다. 코페리 10-17 ~ 10-19 는 프로에 결제 0건 (구 식스샵 확인 필요).
 
+## 주문 내보내기 (한 번씩) — `src/export-pro-orders.ts`
+
+기간(기본 한 달) 주문을 **주문일(orderedAt) KST** 기준으로 상태와 상관없이 전부 받아(Access Key · 공식 Open API) 비공개 레포
+`brightbeed-reports/exports/sixshop-pro-orders/{기간}/{브랜드}.json` + `manifest.json` 에 올린다. 엑셀은 받는 쪽에서 만든다.
+보고서처럼 **개인정보 없이** — 알려진 주문 · 상품 줄 필드 + 키 이름에 개인정보 낱말이 없는 숫자 · 참거짓 · 시각 · 상태/코드 값만.
+안 담은 키는 이름만 `excluded_keys` 에. 이미 올린 기간은 건너뜀 (`--force` 로 다시).
+
+```bash
+npm run export-pro-orders -- --month 2026-10                     # 코페리 · 아페티 · 코즈미 (기본)
+npm run export-pro-orders -- --month 2026-10 --brands kop --dry  # 받기만 (기록 없음)
+```
+
+맥미니에서 돌릴 땐 `mac/jobs/export-pro-orders.job` 의 RUN · RUN_NOW 를 바꿔 올리고, 다 받으면 그 파일을 지운다.
+주의: 코페리 10-20 · 아페티 10-22 전 프로 데이터에는 네이버페이 주문형이 없다 (위 "식스샵 프로" 절) — 그 주문은 구 식스샵에 있다.
+시험: `npx tsx tests/export-pro-orders.test.ts`
+
 ## 실행 (일반 식스샵 — 옮기기 전 기간)
 
 예전엔 맥미니 `home-daily-kop.job` 이 매일 07:20 · 21:00 실행했다 — 2026-10-28 삭제 (프로 상점은 위 `home-live` 가 맡음). 지금은 손으로만.

@@ -94,6 +94,9 @@ ABLY_AD_MARKET_SNO_6A=22249   # 식스에이
 REPORTS_GITHUB_TOKEN=ghp_test
 SIXSHOP_PRO_EMAIL=pro@example.co.kr
 SIXSHOP_PRO_PASSWORD=pw
+SIXSHOP_PRO_ACCESS_KEY_KOP=key-kop
+SIXSHOP_PRO_ACCESS_KEY_APT=key-apt
+SIXSHOP_PRO_ACCESS_KEY_KOZ=key-koz
 GOOGLE_SERVICE_ACCOUNT_PATH=./keys/sa.json
 EOF
 echo '{}' >"$HOME/projects/sixshop-collector/keys/sa.json"
