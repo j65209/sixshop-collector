@@ -20,7 +20,8 @@ npm run home-live -- --brands kop      # 일부 브랜드만
 
 - 오늘 보고서에는 `as_of`(계산 시각 HH:MM, KST) · `assumptions.partial_day` — index.json 줄에도 `as_of`. 오피스는 카드에 "오늘 HH:MM 기준" · LIVE,
   제목에 "● 진행 중"을 띄우고, 켜 둔 화면을 10분마다 다시 불러온다. 숫자가 그대로면 안 올리지만 55분이 지나면 시각을 새로 올림.
-- 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 — 그 전은 프로 데이터에 네이버페이 주문형이 없어서 (코페리 10-20 · 아페티 10-22 · 코즈미 09-03).
+- 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 (코페리 10-27 · 아페티 10-22 · 코즈미 09-03) — 그 전은 프로 데이터에 네이버페이 주문형이 없거나,
+  프로 + 구 식스샵을 합친 보고서라서 (코페리 10-20 ~ 10-26, 아래 "구 식스샵 주문 엑셀 하루씩 받기").
 - 광고비 (`src/home-ad.ts`): 광고 시트 값이 있으면 그것, 아직 없으면 **메타 광고 데이터**(`beaduniverse/data/meta-ads/{브랜드}.json`, 맥미니가 약 1시간마다 갱신)의
   오늘 · 어제 광고비 × 그날 환율로 **추정** (`assumptions.ad_estimated`, 오피스 "메타 기준 추정"). 광고 시트 krw 도 메타 달러 × 환율이라 같은 계산.
 - env (맥미니 `.env`): `SIXSHOP_PRO_ACCESS_KEY_{KOP·APT·KOZ·PP·AKOI·CT}` (상점별 Access Key — 맥미니 프록시 `~/server/brightbeed-proxy/config.env` 와 같은 값) · `REPORTS_GITHUB_TOKEN`.
@@ -85,7 +86,30 @@ discountAmount, totalDiscountAmount, refundAmount, types, items:[{poid, name, op
 - 네이버페이 주문형이 프로에 들어온 날: 코페리 **10-20**, 아페티 **10-22**, 코즈미 9월부터 (10-16 ~ 10-19 만 0건 — 연동 바꾸는 사이로 보임).
   그 전 프로 데이터는 구 식스샵에서 옮겨 온 **자사몰 주문만** (주문번호 `YYYYMMDD`+5자 — 코페리 10-06 ~ 10-20, 아페티 09-01 ~ 10-21) —
   네이버페이 주문형은 옮겨 오지 않았다. 주문번호 16자리 숫자 = 네이버페이, 12자리 영숫자 = 프로 자사몰.
-  → 그 기간은 프로 데이터로 만들지 않고 구 식스샵 주문 엑셀(`--xlsx`)로 채운다. 코페리 10-17 ~ 10-19 는 프로에 결제 0건 (구 식스샵 확인 필요).
+  → 그 기간은 프로 데이터로 만들지 않고 구 식스샵 주문 엑셀(`--xlsx`)로 채운다 (아래 절).
+
+## 구 식스샵 주문 엑셀 하루씩 받기
+
+관리자 화면 "전체 목록 내려받기"는 최근 1,000건까지지만, 같은 API 에 날짜를 주면 그날 주문을 다 준다. 로그인된 세션(프록시 `state/sixshop_admin_{브랜드}.json`)으로:
+
+`POST https://www.sixshop.com/apis/user-home/v2/excels/orders?orderType=PRODUCT` (form) —
+`memberNo` · `exportType=shopOrderByProduct` · `orderStatus=0`(상태 전체) · `search=true` · `startOrderDate` · `endOrderDate` · `templates`
+
+`templates` = 받을 열 `[{fieldName, columnName, checked:true}]` JSON. 열 이름 ↔ fieldName 은 `GET /apis/user-home/v2/excels/orders/templates?orderType=PRODUCT` (+ `/templates/default`).
+**`src/home-report.ts` 가 읽는 열만 골라** 구매자 정보를 아예 받지 않는다. `PUT .../templates` 는 화면 설정 저장이라 부르지 않는다. memberNo 는 프록시 `sixshop_admin_sales.py` BRANDS.
+계산은 `home-daily.ts kop {날짜} --xlsx … --xlsx … --out r.json` — 그날보다 앞 날짜 파일도 같이 줘야 한다 (`coversWholeDay`).
+
+코페리 보고서 출처:
+
+| 날짜 | 출처 |
+|---|---|
+| 09-06 ~ 10-05 | 구 식스샵 엑셀 — 10-05 직후에 받은 값이라 그 뒤의 반품 · 늦은 입금은 안 들어 있다 (2026-11-01 다시 받아 보니 10-05 는 102건 · 3,670,000원, 보고서 105건 · 3,756,000원) |
+| 10-06 ~ 10-19 | 구 식스샵 엑셀 (2026-11-01 받음) |
+| 10-20 ~ 10-22 · 10-24 ~ 10-26 | 프로 + 구 식스샵 합침 — 프로 네이버페이가 10-20 10:42 부터라 10-20 은 구 상점 주문이 대부분이고, 그 뒤는 구 상점에 들어온 주문 13건. 같은 주문번호는 프로 것 |
+| 10-23 · 10-27 ~ | 프로만 |
+
+확인: 10-03 ~ 10-20 일별 주문 수가 프록시 `out/admin_kop_sales.json` 기록과 전부 일치. 10-04 · 10-05 는 기존 보고서와 상품 줄이 전부 같고 상태만 다르다.
+구 식스샵은 주문일 · 프로는 결제일 기준이라 합친 날 제목에 둘 다 적는다 (`assumptions.date_basis`).
 
 ## 주문 내보내기 (한 번씩) — `src/export-pro-orders.ts`
 

@@ -62,10 +62,12 @@ function fakes(opts: { nowMs: number; repo?: Map<string, unknown>; failStore?: s
   const repo = opts.repo ?? new Map<string, unknown>();
   const calls = { orders: [] as { store: string; fromIso: string; toIso: string }[], commits: [] as { paths: string[]; message: string }[], logs: [] as string[] };
   const costs = async () => [{ name: "Bunny bag", cost: 5000, table: "A" as const }, { name: "Mush bag", cost: 4000, table: "A" as const }];
+  // 시험 날짜(10-21 ~)를 그대로 쓰려고 고정 — 실제 값은 합친 보고서를 지키려고 더 늦다
+  const kop = { ...HOME_BRANDS.kop, liveSince: "2026-10-20" };
   const brands = {
-    ...Object.fromEntries(Object.entries(HOME_BRANDS).map(([id, b]) => [id, { ...b, loadCosts: costs, makeMatcher: undefined, costMatch: undefined, unitsPerLine: undefined }])),
+    ...Object.fromEntries(Object.entries({ ...HOME_BRANDS, kop }).map(([id, b]) => [id, { ...b, loadCosts: costs, makeMatcher: undefined, costMatch: undefined, unitsPerLine: undefined }])),
     // 원가 시트가 없는 브랜드
-    zz: { ...HOME_BRANDS.kop, name: "시험", proStore: "zzstore", noCostSheet: true, loadCosts: async () => [] },
+    zz: { ...kop, name: "시험", proStore: "zzstore", noCostSheet: true, loadCosts: async () => [] },
   };
   return {
     repo, calls,

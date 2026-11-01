@@ -179,7 +179,8 @@ async function loadOfficePromoCosts(brand: string): Promise<CostRow[]> {
 
 export const HOME_BRANDS: Record<string, HomeBrand> = {
   kop: {
-    name: "코페리", credEnvSuffix: "_KOP", proStore: "coferry", liveSince: "2026-10-20",
+    // 프로 데이터는 10-20 부터지만 10-20 ~ 10-26 은 구 식스샵 주문을 합친 보고서 — 프로만으로 다시 쓰면 구 상점 주문이 빠진다 (docs/HOME-DAILY.md)
+    name: "코페리", credEnvSuffix: "_KOP", proStore: "coferry", liveSince: "2026-10-27",
     costBasis: "MD팀 코페리 시트 — 첫 탭(C·E · P·Q열) → Product List 탭 보충, 상품명·옵션으로 매칭",
     loadCosts: () => loadCostRows(undefined, undefined, true),
   },
