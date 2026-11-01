@@ -275,4 +275,62 @@ await test("--dry 는 받기만 — 레포 읽기 · 기록 없음", async () =>
   assert.equal(api.calls.length, 3);
 });
 
+await test("우편번호 · 공동현관 · 휴대폰 약어 · 받는 사람 약어 키도 개인정보로 봄", () => {
+  for (const k of ["postCode", "zonecode", "zoneCode", "entranceCode", "doorPassword", "hpNo", "rcvNm", "recvAddr", "snsId", "loginId", "kakaoUserNo"]) {
+    assert.ok(m.piiKey(k), `개인정보로 봐야 함: ${k}`);
+  }
+  // 이번 10월 내보내기에 담긴 키는 그대로 담겨야 함 (새 낱말이 지나치게 막지 않는지)
+  for (const k of ["createdAt", "updatedAt", "currency", "storeMarket.marketCode", "originalStatus", "originalClaimStatus", "processStatus", "productType",
+    "deliveryFeeType", "deliveryPolicyType", "deliveryFee", "sectionDeliveryFee", "discountDeliveryFee", "optionManageCode", "paymentGateway"]) {
+    assert.ok(!m.piiKey(k), `개인정보 아님: ${k}`);
+  }
+});
+
+await test("값이 비어 있는 개인정보 키도 뺀 항목에 이름이 남음", () => {
+  const ex = m.newExcluded();
+  const raw = rawOrder("coferry", 9);
+  Object.assign(raw.order, { invoiceNumber: null, trackingNumber: "", postCode: "06236", ordererTel2: null });
+  const o = m.exportOrder(raw, ex);
+  for (const k of ["invoiceNumber", "trackingNumber", "postCode", "ordererTel2"]) assert.ok(ex.order.has(k), `excluded.order 에 ${k}`);
+  assert.ok(!("postCode" in o));
+  assert.ok(!PII_VALUES.test(JSON.stringify(o)));
+});
+
+await test("상품명 · 옵션에 전화번호 · 이메일 모양이 있으면 가리고 경고", async () => {
+  const ex = m.newExcluded();
+  const raw = rawOrder("coferry", 7);
+  Object.assign(raw.productOrders[0], {
+    productOptionValues: ["cream", "010-1234-5678"],
+    productOptionDisplayName: "색상: cream / 연락처: 01012345678",
+    productName: "각인 주문 hong@example.com",
+  });
+  const o = m.exportOrder(raw, ex);
+  const it = (o.items as Record<string, unknown>[])[0];
+  assert.deepEqual(it.productOptionValues, ["cream", m.MASKED]);
+  assert.equal(it.productOptionDisplayName, m.MASKED);
+  assert.equal(it.productName, m.MASKED);
+  assert.equal(ex.masked, 3);
+  assert.ok(!PII_VALUES.test(JSON.stringify(o)), JSON.stringify(o));
+  // +82 형식 · 지역번호 · 일반 상품명은?
+  const it2: Record<string, unknown> = { productName: "Bunny bag 02", productOptionValues: ["+82 10-1234-5678", "02-3456-7890", "1+1", "2개 구매", "Size 230-250"], sku: "HB-CR-2026" };
+  assert.equal(m.maskText(it2), 2);
+  assert.deepEqual(it2.productOptionValues, [m.MASKED, m.MASKED, "1+1", "2개 구매", "Size 230-250"]);
+  assert.equal(it2.productName, "Bunny bag 02");
+  // 가린 게 있으면 파일 warnings 에 남음
+  const api = fakeApi({ totalPerStore: 1 });
+  const realFetch = api.fetchImpl;
+  const patched = (async (input: string | URL, init?: { headers?: Record<string, string> }) => {
+    const r = await realFetch(input, init);
+    const j = await r.json();
+    for (const x of j.list ?? []) x.productOrders[0].productOptionValues = ["010-1234-5678"];
+    return new Response(JSON.stringify(j), { status: r.status });
+  }) as typeof fetch;
+  const repo = fakeRepo();
+  const { d } = deps({ ...api, fetchImpl: patched }, repo);
+  await m.runExport(m.parseArgs(["--month", "2026-10", "--brands", "kop"]), d);
+  const kop = repo.files["exports/sixshop-pro-orders/2026-10/kop.json"] as { warnings: string[] };
+  assert.ok(kop.warnings.some((w) => w.includes("가림")), kop.warnings.join(" / "));
+  assert.ok(!PII_VALUES.test(JSON.stringify(repo.files)));
+});
+
 console.log(`\n${pass}개 통과${process.exitCode ? " · 실패 있음" : ""}`);

@@ -92,7 +92,10 @@ discountAmount, totalDiscountAmount, refundAmount, types, items:[{poid, name, op
 기간(기본 한 달) 주문을 **주문일(orderedAt) KST** 기준으로 상태와 상관없이 전부 받아(Access Key · 공식 Open API) 비공개 레포
 `brightbeed-reports/exports/sixshop-pro-orders/{기간}/{브랜드}.json` + `manifest.json` 에 올린다. 엑셀은 받는 쪽에서 만든다.
 보고서처럼 **개인정보 없이** — 알려진 주문 · 상품 줄 필드 + 키 이름에 개인정보 낱말이 없는 숫자 · 참거짓 · 시각 · 상태/코드 값만.
-안 담은 키는 이름만 `excluded_keys` 에. 이미 올린 기간은 건너뜀 (`--force` 로 다시).
+안 담은 키는 이름만 `excluded_keys` 에 (값이 비어 있던 개인정보 키도). 상품명 · 옵션에 전화번호 · 이메일 모양이 있으면 `[개인정보 의심 — 뺌]` 으로 가리고 `warnings` 에 남김.
+이미 올린 기간은 건너뜀 (`--force` 로 다시).
+2026-10 받은 것으로 확인한 점: 코페리 10-20 10:42 · 아페티 10-22 02:47 전 네이버페이 주문형은 프로에 없음, 구 식스샵에서 옮겨 온 자사몰 주문은 결제일시 = 주문일시,
+네이버페이 취소 · 환불은 환불금액에 배송비가 빠져 있음 (113건 모두).
 
 ```bash
 npm run export-pro-orders -- --month 2026-10                     # 코페리 · 아페티 · 코즈미 (기본)

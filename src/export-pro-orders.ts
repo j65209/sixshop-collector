@@ -44,7 +44,8 @@ export const ITEM_FIELDS = [
 // 키 이름(낱말로 나눔)에 이 중 하나라도 있으면 값이 숫자여도 안 담는다
 const PII_WORDS = new Set([
   "name", "names", "nick", "nickname", "phone", "tel", "telephone", "mobile", "cell", "cellphone", "contact", "email", "mail",
-  "address", "addr", "address1", "address2", "zip", "zipcode", "postcode", "postal", "road", "jibun", "street", "building", "city",
+  "address", "addr", "address1", "address2", "zip", "zipcode", "post", "postcode", "postal", "zone", "zonecode", "road", "jibun", "street", "building", "city",
+  "door", "entrance", "gate", "hp", "recv", "rcv", "nm", "sns", "login", "kakao",
   "lat", "lng", "latitude", "longitude", "location", "geo", "coordinate", "coordinates",
   "memo", "message", "msg", "note", "notes", "comment", "comments", "request", "requests", "remark", "remarks", "reason", "answer",
   "receiver", "recipient", "orderer", "buyer", "customer", "member", "user", "guest", "person", "personal", "privacy", "sender", "depositor",
@@ -77,11 +78,12 @@ export function pickSafe(obj: Record<string, unknown> | null | undefined, known:
       out[k] = v ?? null;
       continue;
     }
-    if (v === null || v === undefined || v === "") continue;
+    // 개인정보 키는 값이 비어 있어도 이름을 남긴다 — excluded_keys 가 "무엇을 뺐는지" 빠짐없이 보여 주게
     if (piiKey(path)) {
       excluded.add(path);
       continue;
     }
+    if (v === null || v === undefined || v === "") continue;
     if (typeof v === "number" || typeof v === "boolean") {
       out[path] = v;
       continue;
@@ -109,8 +111,30 @@ interface RawListItem {
   [k: string]: unknown;
 }
 
-export interface ExcludedKeys { order: Set<string>; item: Set<string>; other: Set<string> }
-export const newExcluded = (): ExcludedKeys => ({ order: new Set(), item: new Set(), other: new Set() });
+export interface ExcludedKeys { order: Set<string>; item: Set<string>; other: Set<string>; masked: number }
+export const newExcluded = (): ExcludedKeys => ({ order: new Set(), item: new Set(), other: new Set(), masked: 0 });
+
+// 그대로 담는 상품 줄 글자 필드 — 상점이 작성형 옵션을 보통 옵션처럼 만들면 고객이 쓴 글이 여기로 올 수 있어 내용도 본다
+const ITEM_TEXT_FIELDS = ["productName", "productOptionNames", "productOptionValues", "productOptionDisplayName", "sku", "productManageCode"];
+const PHONE_LIKE = /(?<!\d)(?:\+82[-.\s]?0?|0)(?:1[016789]|[2-6]\d?|70|50\d?)[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/;
+const EMAIL_LIKE = /[\w.+-]+@[\w-]+\.[\w.-]+/;
+export const MASKED = "[개인정보 의심 — 뺌]";
+/** 전화번호 · 이메일 모양 글자는 통째로 가림. 가린 개수를 돌려줌 */
+export function maskText(item: Record<string, unknown>): number {
+  let n = 0;
+  const bad = (s: unknown) => typeof s === "string" && (PHONE_LIKE.test(s) || EMAIL_LIKE.test(s));
+  for (const k of ITEM_TEXT_FIELDS) {
+    const v = item[k];
+    if (bad(v)) {
+      item[k] = MASKED;
+      n++;
+    } else if (Array.isArray(v) && v.some(bad)) {
+      item[k] = v.map((x) => (bad(x) ? MASKED : x));
+      n += v.filter(bad).length;
+    }
+  }
+  return n;
+}
 
 /** 주문 하나 — 주문 필드 + 목록 줄의 다른 값(storeMarket 등, "storeMarket.x" 로 폄) + 상품 줄 */
 export function exportOrder(x: RawListItem, ex: ExcludedKeys): Record<string, unknown> {
@@ -118,7 +142,11 @@ export function exportOrder(x: RawListItem, ex: ExcludedKeys): Record<string, un
   return {
     ...pickSafe(order, ORDER_FIELDS, ex.order),
     ...pickSafe(rest, [], ex.other),
-    items: (productOrders ?? []).map((p) => pickSafe(p, ITEM_FIELDS, ex.item)),
+    items: (productOrders ?? []).map((p) => {
+      const it = pickSafe(p, ITEM_FIELDS, ex.item);
+      ex.masked += maskText(it);
+      return it;
+    }),
   };
 }
 
@@ -269,6 +297,7 @@ export async function runExport(args: ExportArgs, deps: ExportDeps): Promise<{ o
       if (raw.apiTotal != null && raw.apiTotal !== orders.length) warnings.push(`API 총 ${raw.apiTotal}건 ≠ 받은 ${orders.length}건`);
       if (raw.dupes) warnings.push(`페이지 사이 중복 ${raw.dupes}건 (주문번호로 합침)`);
       if (outside) warnings.push(`기간 밖 주문 ${outside}건 (그대로 둠)`);
+      if (ex.masked) warnings.push(`상품명 · 옵션에 전화번호 · 이메일 모양 값 ${ex.masked}개 — "${MASKED}" 로 가림`);
       const file = `${dir}/${id}.json`;
       const content = {
         kind: "sixshop-pro-orders",
