@@ -20,8 +20,8 @@ npm run home-live -- --brands kop      # 일부 브랜드만
 
 - 오늘 보고서에는 `as_of`(계산 시각 HH:MM, KST) · `assumptions.partial_day` — index.json 줄에도 `as_of`. 오피스는 카드에 "오늘 HH:MM 기준" · LIVE,
   제목에 "● 진행 중"을 띄우고, 켜 둔 화면을 10분마다 다시 불러온다. 숫자가 그대로면 안 올리지만 55분이 지나면 시각을 새로 올림.
-- 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 (코페리 10-27 · 아페티 10-22 · 코즈미 09-03) — 그 전은 프로 데이터에 네이버페이 주문형이 없거나,
-  프로 + 구 식스샵을 합친 보고서라서 (코페리 10-20 ~ 10-26, 아래 "구 식스샵 주문 엑셀 하루씩 받기").
+- 브랜드별 `liveSince`(`src/home-brands.ts`) 전 날짜는 절대 안 건드림 (코페리 10-27 · 아페티 10-28 · 코즈미 09-03) — 그 전은 프로 데이터에 네이버페이 주문형이 없거나,
+  프로 + 구 식스샵을 합친 보고서라서 (코페리 10-20 ~ 10-26 · 아페티 10-22 ~ 10-27, 아래 "구 식스샵 주문 엑셀 하루씩 받기").
 - 광고비 (`src/home-ad.ts`): 광고 시트 값이 있으면 그것, 아직 없으면 **메타 광고 데이터**(`beaduniverse/data/meta-ads/{브랜드}.json`, 맥미니가 약 1시간마다 갱신)의
   오늘 · 어제 광고비 × 그날 환율로 **추정** (`assumptions.ad_estimated`, 오피스 "메타 기준 추정"). 광고 시트 krw 도 메타 달러 × 환율이라 같은 계산.
 - env (맥미니 `.env`): `SIXSHOP_PRO_ACCESS_KEY_{KOP·APT·KOZ·PP·AKOI·CT}` (상점별 Access Key — 맥미니 프록시 `~/server/brightbeed-proxy/config.env` 와 같은 값) · `REPORTS_GITHUB_TOKEN`.
@@ -110,6 +110,9 @@ discountAmount, totalDiscountAmount, refundAmount, types, items:[{poid, name, op
 
 확인: 10-03 ~ 10-20 일별 주문 수가 프록시 `out/admin_kop_sales.json` 기록과 전부 일치. 10-04 · 10-05 는 기존 보고서와 상품 줄이 전부 같고 상태만 다르다.
 구 식스샵은 주문일 · 프로는 결제일 기준이라 합친 날 제목에 둘 다 적는다 (`assumptions.date_basis`).
+
+아페티 보고서 출처: 09-06 ~ 10-21 구 식스샵 엑셀 · 10-22 ~ 10-27 프로 + 구 식스샵 합침 (구 상점 주문 46건) · 10-28 ~ 프로만.
+일별 주문 수는 `out/admin_apt_sales.json` 과 일치 (10-21 은 그 기록이 14:54 에 끊겨 있어 제외). 원가는 엑셀 경로도 옵션을 읽는 2판 — 미확인 0.
 
 ## 주문 내보내기 (한 번씩) — `src/export-pro-orders.ts`
 

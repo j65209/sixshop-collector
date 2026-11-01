@@ -90,7 +90,7 @@ export function buildHomeReport(rows: XlsxRow[], o: HomeReportOptions) {
     // 주문 단위 할인은 상품별 결제 금액 비율로 나눠서 상품 줄에 표시
     const coupon = Math.round(o2.coupon * share);
     const emoney = Math.round(o2.emoney * share);
-    const cm = matchCost(o.costRows, name, code, option);
+    const cm = o.costMatcher ? o.costMatcher(name, code, option) : matchCost(o.costRows, name, code, option);
     return {
       sno: clean(r["상품 주문번호 (네이버페이 주문형)"]) || `${orderNo}-${idx + 1}`,
       order_sno: orderNo,

@@ -185,7 +185,8 @@ export const HOME_BRANDS: Record<string, HomeBrand> = {
     loadCosts: () => loadCostRows(undefined, undefined, true),
   },
   apt: {
-    name: "아페티", credEnvSuffix: "_APT", proStore: "apeti", liveSince: "2026-10-22",
+    // 프로 데이터는 10-22 부터지만 10-22 ~ 10-27 은 구 식스샵 주문을 합친 보고서 (코페리와 같은 이유)
+    name: "아페티", credEnvSuffix: "_APT", proStore: "apeti", liveSince: "2026-10-28",
     costBasis: "MD팀 아페티 시트 — Product List → 공홈 가격 수정 표 → 플랫폼 세트 F열(공급가), 옵션에 고른 반지·목걸이까지 읽어 매칭",
     loadCosts: loadApetiCosts,
     costMatch: { aliases: APETI_ALIASES, special: apetiSpecial },

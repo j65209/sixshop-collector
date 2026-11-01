@@ -64,8 +64,9 @@ function fakes(opts: { nowMs: number; repo?: Map<string, unknown>; failStore?: s
   const costs = async () => [{ name: "Bunny bag", cost: 5000, table: "A" as const }, { name: "Mush bag", cost: 4000, table: "A" as const }];
   // 시험 날짜(10-21 ~)를 그대로 쓰려고 고정 — 실제 값은 합친 보고서를 지키려고 더 늦다
   const kop = { ...HOME_BRANDS.kop, liveSince: "2026-10-20" };
+  const apt = { ...HOME_BRANDS.apt, liveSince: "2026-10-22" };
   const brands = {
-    ...Object.fromEntries(Object.entries({ ...HOME_BRANDS, kop }).map(([id, b]) => [id, { ...b, loadCosts: costs, makeMatcher: undefined, costMatch: undefined, unitsPerLine: undefined }])),
+    ...Object.fromEntries(Object.entries({ ...HOME_BRANDS, kop, apt }).map(([id, b]) => [id, { ...b, loadCosts: costs, makeMatcher: undefined, costMatch: undefined, unitsPerLine: undefined }])),
     // 원가 시트가 없는 브랜드
     zz: { ...kop, name: "시험", proStore: "zzstore", noCostSheet: true, loadCosts: async () => [] },
   };
