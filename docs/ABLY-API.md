@@ -45,7 +45,7 @@
 
 - `GET /seller/balance_accounts/histories/?start_date&end_date` → `balance_accounts_histories[]` — 날짜는 **`YYYY-MM`(월)**. 일자(`YYYY-MM-DD`)를 넣으면 500
   - `payment_amount`(결제액), `payment_fees`(결제수수료), `platform_fees`(판매수수료), `category_fees`, `promotion_amount`(프로모션 차감), `delivery_amount`, `logistics_fee`, `total_amount`(정산액), `scheduled_at`, `is_completed`, `period`
-  - 실측: 결제 11,119,481 → 결제수수료 4.4%, 판매수수료 23.1%, 정산 9,718,964
+  - 실측: 결제수수료 4.4%, 판매수수료 23.1%
 - `GET /seller/balance_accounts/goods/?page&per_page&start_date&end_date` → 상품별 `quantity`, `payment_amount`, `amount`(정산액). 합계 `total_payment_amount`, `total_amount`
 
 ## 기획전 — `GET /seller/event-applications/?page&per_page&is_apply_period`
