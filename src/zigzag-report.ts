@@ -1,7 +1,8 @@
 /**
  * 지그재그 하루 보고서 계산 — 네트워크 없음. 받기는 src/zigzag-api.ts, 실행은 src/zigzag-live.ts.
- *   순이익 = 실결제 − 수수료(9.5%) − 직배 이용료 − 택배비(주문번호당 2,200원) − 광고비 − 원가
- * 사장님 손익 시트와 같은 기준 (수수료 9.5% · 택배비는 직진배송 주문도 2,200원). 양식은 에이블리 보고서와 같고 오피스 전략팀이 읽는다.
+ *   순이익 = 실결제 − 수수료(9.5%) − 직배 이용료 − 택배비(스토어배송 주문번호당 2,200원) − 광고비 − 원가
+ * 수수료는 사장님 손익 시트와 같은 9.5%. 직진배송 주문은 지그재그 창고에서 나가고 출고비가 직배 이용료에 들어 있어 택배비를 안 뺀다 (사장님 결정 2026-11-02).
+ * 양식은 에이블리 보고서와 같고 오피스 전략팀이 읽는다.
  * 실결제 = 주문 항목 금액 (지그재그 주문금액, 쿠폰 빼기 전) — 취소 · 반품 · 입금 전은 뺀다. 날짜 = 주문일 KST.
  *
  * env (선택): ZIGZAG_FEE_RATE(기본 0.095) · ZIGZAG_SHIPPING_COST(기본 2200)
@@ -68,9 +69,11 @@ export function buildZigzagReport(
   const live = orders.filter((o) => !o.excluded);
   const sum = (k: "gross" | "coupon" | "paid" | "ea" | "cost") => live.reduce((s, o) => s + (o[k] || 0), 0);
   const orderNos = new Set(live.map((o) => o.order_sno));
+  // 택배비 대상 — 스토어배송 항목이 하나라도 있는 주문 (직진배송만 있는 주문은 빠짐)
+  const shipOrders = new Set(live.filter((o) => o.delivery_type === "merchant").map((o) => o.order_sno)).size;
   const paid = sum("paid");
   const feesEst = Math.round(paid * ZIGZAG_FEE_RATE);
-  const shipping = orderNos.size * SHIPPING_COST;
+  const shipping = shipOrders * SHIPPING_COST;
   const cost = sum("cost");
   const net = paid - feesEst - shipping - d.ad.charge - cost - d.directFee;
 
@@ -82,7 +85,7 @@ export function buildZigzagReport(
     assumptions: {
       shipping_cost_per_order: SHIPPING_COST,
       fee_rate: ZIGZAG_FEE_RATE,
-      fee_note: "수수료는 사장님 손익 시트와 같은 9.5%로 계산했어요.",
+      fee_note: "수수료는 사장님 손익 시트와 같은 9.5%로 계산했어요. 직진배송 주문은 출고비가 직배 이용료에 들어 있어 택배비를 빼지 않아요.",
       cost_basis: opts.costBasis,
       ad_basis: d.ad.basis,
       date_basis: "주문일",
@@ -101,6 +104,7 @@ export function buildZigzagReport(
       direct_fee: d.directFee,
       settle_est: paid - feesEst,
       shipping,
+      ship_orders: shipOrders,
       zigzin_items: live.filter((o) => o.delivery_type === "zigzin").length,
       ad_spend: d.ad.charge,
       ad_order_price: d.ad.adOrderPrice,

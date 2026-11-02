@@ -68,6 +68,24 @@ await test("같은 주문의 여러 항목은 택배비 한 번 · 일부 취소
   assert.equal(s.qty, 2);
 });
 
+await test("직진배송 주문은 택배비를 안 뺀다 — 스토어배송이 섞인 주문은 한 번", () => {
+  const s = buildZigzagReport("2026-11-01", {
+    items: [
+      item("2026-11-01 10:00", 10000, { order_number: "Z1", fulfillment: "zigzin" }),
+      item("2026-11-01 10:00", 10000, { order_number: "Z2", fulfillment: "zigzin" }),
+      item("2026-11-01 10:00", 10000, { order_number: "M1" }),
+      item("2026-11-01 10:00", 10000, { order_number: "MIX" }),
+      item("2026-11-01 10:00", 10000, { order_number: "MIX", fulfillment: "zigzin" }),
+      item("2026-11-01 10:00", 10000, { order_number: "M2", status: "CANCELLED" }),
+    ],
+    directFee: 5000, ad: noAd,
+  }, costOf, opts).summary;
+  assert.equal(s.orders, 4);
+  assert.equal(s.ship_orders, 2);
+  assert.equal(s.shipping, 4400);
+  assert.equal(s.net, 50000 - 4750 - 5000 - 4400 - 5000);
+});
+
 await test("날짜는 주문일 KST — 자정 전후가 갈린다", () => {
   const items = [item("2026-11-01 23:59", 1), item("2026-11-02 00:01", 2)];
   assert.equal(zigzagItemsOn(items, "2026-11-01").length, 1);
@@ -117,6 +135,7 @@ await test("오늘 · 어제를 커밋 하나로 — 오늘만 진행 중, index
   assert.equal(idx.days[1].as_of, undefined);
   assert.equal(idx.days[1].direct_fee, 500);
   assert.equal(idx.days[1].fees_est, 1900);
+  assert.equal(idx.days[1].ship_orders, 1);
   assert.equal(idx.days[1].ad_spend, 700);
   assert.ok(t.store["zigzag/apt/daily/2026-11-01.json"]);
   assert.equal((t.store["zigzag/apt/daily/2026-11-01.json"] as { summary: { ad_spend: number } }).summary.ad_spend, 0); // 아페티는 광고 시트 없음
