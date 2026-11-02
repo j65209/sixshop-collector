@@ -51,6 +51,9 @@ export interface IndexRow {
   ad_spend: number;
   coupon_orders: number;
   cost: number | null;
+  /** 지그재그만 — 오피스 월간 손익 메인보드가 칸별로 읽는다 (수수료 · 직진배송 이용료) */
+  fees_est?: number;
+  direct_fee?: number;
   /** 하루가 아직 안 끝난 보고서 — 계산한 시각 "HH:MM"(KST). 오피스가 "진행 중"으로 표시 */
   as_of?: string;
 }
@@ -72,6 +75,7 @@ export function indexRowOf(report: DailyReportBase): IndexRow {
     ad_spend: s.ad_spend,
     coupon_orders: s.coupon_orders,
     cost: s.cost,
+    ...(s.direct_fee != null ? { fees_est: s.fees_est, direct_fee: s.direct_fee } : {}),
     ...(report.as_of ? { as_of: report.as_of } : {}),
   };
 }
