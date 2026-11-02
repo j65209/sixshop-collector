@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import type { Brand } from "./brands.js";
 
-const BASE_URL = "https://api.commerce.naver.com/external";
+export const BASE_URL = "https://api.commerce.naver.com/external";
 
 interface SsCreds {
   clientId: string;
@@ -30,7 +30,7 @@ export function smartStoreCreds(brand: Brand): SsCreds {
   return { clientId, clientSecret };
 }
 
-async function getAccessToken(creds: SsCreds): Promise<string> {
+export async function getAccessToken(creds: SsCreds): Promise<string> {
   const cached = tokenCache.get(creds.clientId);
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
 
@@ -64,7 +64,7 @@ async function getAccessToken(creds: SsCreds): Promise<string> {
 }
 
 /** ISO 8601 with KST offset, e.g. "2026-05-06T14:00:00.000+09:00" */
-function toKstIso(d: Date): string {
+export function toKstIso(d: Date): string {
   const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
   const yyyy = kst.getUTCFullYear();
   const mm = String(kst.getUTCMonth() + 1).padStart(2, "0");
@@ -123,7 +123,7 @@ interface ProductOrderDetail {
   };
 }
 
-async function fetchWithRetry(url: string | URL, init: RequestInit): Promise<Response> {
+export async function fetchWithRetry(url: string | URL, init: RequestInit): Promise<Response> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const resp = await fetch(url, init);
     if (resp.status !== 429) return resp;

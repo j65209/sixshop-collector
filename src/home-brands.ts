@@ -106,33 +106,35 @@ const ctSpecial = (goodsName: string): string[] => {
   return [CT_ALIASES[bare.toLowerCase()] ?? bare];
 };
 
-/* 프로덕트피알: 시트 C열이 한글 내부명(180도 케이블 · 포니 파우치 …)이라 공홈 상품 → 시트 행 대응표로 찾음 (2026-08 ~ 10 주문으로 맞춤).
+/* 프로덕트피알: 시트 C열이 한글 내부명(180도 케이블 · 포니 파우치 …)이라 상품 → 시트 행 대응표로 찾음 (공홈 2026-08 ~ 10 주문 · 스마트스토어 2026-10 주문으로 맞춤).
    색상 줄은 C열 · E열이 비어 있어 위 줄 값을 이어 씀. 180도 케이블 · 포인원은 D열(C-C / U-C / U-8 · 길이)마다 단가가 다름.
    대응표에 없는 상품(Jacquard 케이블 · Flower Keychain · Ball hanger 등 — 시트에 없음)은 미확인. 새 상품은 여기에 추가 */
 interface PpRow { name: string; opt: string; cny: number }
 type PpPick = { name: string; opt?: RegExp; guess?: boolean } | null;
 const PP_MAP: [RegExp, (option: string) => PpPick][] = [
-  [/180°?\s*fast\s*charging\s*cable/i, (o) => {
-    const v = /c\s*type\s*->\s*c\s*type/i.test(o) ? "C-C" : /usb\s*->\s*c\s*type/i.test(o) ? "U-C" : /usb\s*->\s*(apple|8\s*pin)/i.test(o) ? "U-8" : null;
+  // 스마트스토어 옵션 표기는 "기종옵션: USB - C type", 공홈은 "USB -> C type"
+  [/180°?\s*fast\s*charging\s*cable|180도\s*회전\s*고속충전케이블/i, (o) => {
+    const v = /c\s*type\s*->?\s*c\s*type/i.test(o) ? "C-C" : /usb\s*->?\s*c\s*type/i.test(o) ? "U-C" : /usb\s*->?\s*(apple|8\s*pin)/i.test(o) ? "U-8" : null;
     return v ? { name: "180도 케이블", opt: new RegExp(`^${v}$`) } : null;
   }],
   // 기존 · 신규 포인원 중 어느 쪽인지 확인 전 — 6색이 2026-05 신규 발주와 같아 신규로 (기본값 표시)
-  [/4\s*in\s*1\s*fast\s*charging\s*cable/i, (o) => ({ name: "신규 포인원", opt: /1\.5/.test(o) ? /^1\.5$/ : /^2$/, guess: true })],
+  [/4\s*in\s*1\s*(fast\s*charging\s*cable|고속충전케이블)/i, (o) => ({ name: "신규 포인원", opt: /1\.5/.test(o) ? /^1\.5$/ : /^2$/, guess: true })],
   [/poni\s*mesh\s*pouch/i, () => ({ name: "포니 파우치" })],
   [/padded\s*color\s*pouch/i, () => ({ name: "패딩 파우치 옐로우" })],
   [/compact\s*phone\s*stand/i, () => ({ name: "휴대폰 거치대 레드" })], // 裸装 0.55 — 색상 무관
   [/360°?\s*rotating\s*phone\s*holder/i, (o) =>
     /블랙|black/i.test(o) ? { name: "휴대폰 거치대 블랙", opt: /旋转/ } : /화이트|white/i.test(o) ? { name: "휴대폰 거치대 화이트", opt: /旋转/ } : { name: "휴대폰 거치대 실버" }],
   [/pixel\s*mini\s*handle\s*pouch/i, () => ({ name: "픽셀 파우치" })],
+  [/캔버스\s*미니\s*토드백/i, () => ({ name: "픽셀 파우치", guess: true })], // 스마트스토어 이름 — 같은 상품으로 추정 (기본값 표시)
   [/traveler\s*pouch/i, () => ({ name: "트레블 파우치 퍼플" })],
-  [/curve\s*toilet\s*mini\s*brush/i, () => ({ name: "변기솔" })],
+  [/curve\s*toilet\s*mini\s*brush|화장실\s*변기\s*솔/i, () => ({ name: "변기솔" })],
   [/character\s*snack\s*clip/i, () => ({ name: "과자집게 아이보리" })],
   [/freestanding\s*holder/i, () => ({ name: "프리스탠딩 홀더" })],
-  [/w(?:i|ri|ir)st\s*rest\s*mouse\s*pad/i, () => ({ name: "마우스패드" })], // 공홈 표기 "Wirst"
+  [/w(?:i|ri|ir)st\s*rest\s*mouse\s*pad|손목\s*마우스패드/i, () => ({ name: "마우스패드" })], // 공홈 표기 "Wirst"
   [/soft\s*silicone\s*carry\s*pouch/i, () => ({ name: "실리콘 파우치" })],
   // 추정 대응 (확인 전 — 기본값 표시)
   [/cloud\s*grip\s*glass\s*mini\s*brush/i, () => ({ name: "거울닦이", guess: true })],
-  [/basic\s*to(?:il|li)e?t\s*slippers/i, () => ({ name: "신규 슬리퍼", guess: true })], // 공홈 표기 "Toliet"
+  [/basic\s*to(?:il|li)e?t\s*slippers|화장실\s*슬리퍼/i, () => ({ name: "신규 슬리퍼", guess: true })], // 공홈 표기 "Toliet"
 ];
 const space1 = (x: string) => x.replace(/\s+/g, " ").trim();
 async function loadPpRows(gid: string): Promise<PpRow[]> {

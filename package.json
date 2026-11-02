@@ -15,6 +15,7 @@
     "home-live": "tsx src/home-live.ts",
     "ably-live": "tsx src/ably-live.ts",
     "zigzag-live": "tsx src/zigzag-live.ts",
+    "smartstore-live": "tsx src/smartstore-live.ts",
     "export-pro-orders": "tsx src/export-pro-orders.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

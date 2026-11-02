@@ -1,0 +1,10 @@
+# 스마트스토어 실시간 보고서 (프로덕트피알) — 오늘(진행 중) · 어제 보고서를 30분마다 다시 계산.
+# 비공개 레포 brightbeed-reports 의 smartstore/pp 에 올림. 06시 이후 첫 실행은 지난 8일을 다시 계산 (늦은 취소 · 반품).
+# 오피스 전략팀 → 플랫폼 탭이 읽는다. 계산 · 규칙은 docs/SMARTSTORE.md (src/smartstore-live.ts)
+DESC=스마트스토어 실시간 보고서 (프로덕트피알)
+RUN=npm run smartstore-live
+EVERY_MIN=30
+REQUIRES=SMARTSTORE_PP_CLIENT_ID SMARTSTORE_PP_CLIENT_SECRET REPORTS_GITHUB_TOKEN
+TIMEOUT_MIN=10
+# RUN_NOW: 값을 바꿔 올리면 맥미니가 다음 확인 때(15분 안) 한 번 바로 실행
+RUN_NOW=2026-11-02 프로덕트피알 스마트스토어 연결

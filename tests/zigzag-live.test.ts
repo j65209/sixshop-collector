@@ -1,7 +1,7 @@
 /**
  * 지그재그 실시간 수집기(src/zigzag-live.ts runZigzagLive) · 보고서 계산(src/zigzag-report.ts) 시험 — 네트워크 · 계정 없음.
  *   npx tsx tests/zigzag-live.test.ts
- * 순이익 계산, 취소 · 반품 빼기, 일부 취소, 날짜 범위 · 진행 중 표시, 원가 · 광고 시트를 못 읽으면 아무것도 안 올리기,
+ * 순이익 계산, 브랜드별 수수료율, 취소 · 반품 빼기, 일부 취소, 날짜 범위 · 진행 중 표시, 원가 표 · 광고비를 못 읽으면 아무것도 안 올리기, 원가표 없는 브랜드,
  * 바뀐 것만 커밋, index 칸(수수료 · 이용료), 개인정보 칸이 없는지를 확인한다.
  */
 import assert from "node:assert/strict";
@@ -34,9 +34,9 @@ function item(when: string, amount: number, o: Partial<Item> = {}): Item {
 }
 const costOf = () => ({ cost_unit: 1000, cost_name: "시트 행", cost_match: "exact" as const });
 const noAd = { charge: 0, adOrderPrice: 0, basis: "없음" };
-const opts = { market: "코페리", costBasis: "시험" };
+const opts = { market: "코페리", costBasis: "시험", feeRate: 0.095 };
 
-await test("순이익 = 실결제 − 수수료 9.5% − 이용료 − 택배비 − 광고비 − 원가", () => {
+await test("순이익 = 실결제 − 수수료 − 이용료 − 택배비 − 광고비 − 원가", () => {
   const r = buildZigzagReport("2026-11-01", { items: [item("2026-11-01 10:00", 100000), item("2026-11-01 11:00", 50000)], directFee: 3000, ad: { charge: 10000, adOrderPrice: 0, basis: "" } }, costOf, opts);
   const s = r.summary;
   assert.equal(s.paid, 150000);
@@ -111,9 +111,9 @@ function deps(over: Record<string, unknown> = {}) {
       api: async () => ({
         items: async (from: string, to: string) => { asked.items.push([from, to]); return orders; },
         fees: async (m: string) => { asked.fees.push(m); return { "2026-11-01": 500 }; },
+        ads: async () => ({ "2026-11-01": { krw: 700, rev: 0 } }),
       }),
       costOf: async () => costOf,
-      adDays: async () => ({ "2026-11-01": { krw: 700, rev: 0 } }),
       getJson: async <T>(path: string) => (store[path] ?? null) as T | null,
       commit: async (files: { path: string; content: unknown }[], message: string) => { commits.push({ files, message }); for (const f of files) store[f.path] = JSON.parse(JSON.stringify(f.content)); return "sha"; },
       brands: ZIGZAG_BRANDS,
@@ -138,7 +138,8 @@ await test("오늘 · 어제를 커밋 하나로 — 오늘만 진행 중, index
   assert.equal(idx.days[1].ship_orders, 1);
   assert.equal(idx.days[1].ad_spend, 700);
   assert.ok(t.store["zigzag/apt/daily/2026-11-01.json"]);
-  assert.equal((t.store["zigzag/apt/daily/2026-11-01.json"] as { summary: { ad_spend: number } }).summary.ad_spend, 0); // 아페티는 광고 시트 없음
+  // 수수료율은 브랜드별
+  assert.equal((t.store["zigzag/apt/daily/2026-11-01.json"] as { summary: { fees_est: number } }).summary.fees_est, 1700);
 });
 
 await test("바뀐 게 없으면 지난 날은 안 올림", async () => {
@@ -162,7 +163,7 @@ await test("06시 이후 그날 첫 실행은 지난 8일", async () => {
 for (const [name, over] of [
   ["주문을 못 받으면", { api: async () => { throw new Error("지그재그 → 401"); } }],
   ["원가 표를 못 읽으면", { costOf: async () => { throw new Error("원가 시트 500"); } }],
-  ["광고 시트를 못 읽으면", { adDays: async () => { throw new Error("광고 시트 500"); } }],
+  ["광고비를 못 받으면", { api: async () => ({ items: async () => [], fees: async () => ({}), ads: async () => { throw new Error("지그재그 광고 → 500"); } }) }],
 ] as const) {
   await test(`${name} 그 브랜드는 아무것도 안 올림`, async () => {
     const t = deps(over);
@@ -171,6 +172,15 @@ for (const [name, over] of [
     assert.equal(t.commits.length, 0);
   });
 }
+
+await test("원가표 없는 브랜드(식스에이)는 원가 미반영 — 순이익에서 안 빼고 cost 는 null", () => {
+  const r = buildZigzagReport("2026-11-01", { items: [item("2026-11-01 10:00", 10000)], directFee: 0, ad: noAd }, null, { market: "식스에이", costBasis: "원가 미반영", feeRate: 0.09 });
+  assert.equal(r.summary.cost, null);
+  assert.equal(r.summary.fees_est, 900);
+  assert.equal(r.summary.net, 10000 - 900 - 2200);
+  assert.equal(r.orders[0].cost_match, null);
+  assert.equal(r.summary.cost_missing_items, 0);
+});
 
 await test("시험 실행(--dry)은 기록하지 않음", async () => {
   const t = deps();

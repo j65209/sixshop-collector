@@ -1,7 +1,7 @@
 /**
  * 지그재그 파트너센터 조회 (코페리 · 아페티) — 전략팀 플랫폼 탭 일일 보고서용. 읽기만 한다.
  * 공식 오픈 API 는 직진배송 주문을 안 줘서, 프록시 zigzag_sales.py 처럼 파트너센터 로그인 세션 쿠키로 GraphQL 을 부른다.
- *   세션 파일: ~/projects/zigzag-collector/data/kakaostyle-state-{브랜드}.json
+ *   세션 파일: ~/projects/zigzag-collector/data/kakaostyle-state-{브랜드}.json (식스에이는 kakaostyle-state.json)
  *   프록시 platform-sales 작업이 30분마다 같은 파일을 쓰고, 만료되면 그쪽이 다시 로그인한다 — 여기서는 로그인하지 않는다.
  * 구매자 이름 · 연락처 · 주소 · 메모는 쿼리에 넣지 않는다 (받지도 않음).
  *
@@ -66,10 +66,16 @@ const WMS_FEE_QUERY = `query GetWmsFeeSettlementPageList($searchInput: WmsFeeSet
   wms_fee_settlement_page_list(searchInput: $searchInput, pageInput: $pageInput) { total_pages item_list { date_settled_ymd total_fee_with_vat } }
 }`;
 
+const AD_DAILY_QUERY = `query GetAdPartnerAdSetDailyStatsList($date_ymd_gte: Int!, $date_ymd_lte: Int!, $site_id: ID!, $ad_set_id_list: [ID!]) {
+  ad_partner_ad_set_daily_stats_list(date_ymd_gte: $date_ymd_gte, date_ymd_lte: $date_ymd_lte, site_id: $site_id, ad_set_id_list: $ad_set_id_list) {
+    item_list { date_stats_ymd basic_metrics { billing } quality_index_by_date { d7 { click_order_amount } } }
+  }
+}`;
+
 /** 저장된 세션으로 GraphQL 호출기를 만듦. 세션 파일이 없으면 던짐 */
-export function zigzagClient(brand: string, mainDomain: string): ZigzagGql {
+export function zigzagClient(stateFile: string, mainDomain: string): ZigzagGql {
   const dir = process.env.ZIGZAG_STATE_DIR ?? join(homedir(), "projects", "zigzag-collector", "data");
-  const state = JSON.parse(readFileSync(join(dir, `kakaostyle-state-${brand}.json`), "utf8")) as { cookies: { name: string; value: string; domain: string }[] };
+  const state = JSON.parse(readFileSync(join(dir, stateFile), "utf8")) as { cookies: { name: string; value: string; domain: string }[] };
   const cookie = state.cookies.filter((c) => c.domain.includes("kakaostyle")).map((c) => `${c.name}=${c.value}`).join("; ");
   return async (op, query, variables) => {
     const r = await fetch(`${BASE}/api/provider/${mainDomain}/graphql/${op}`, {
@@ -141,6 +147,22 @@ export async function fetchZigzinFees(gql: ZigzagGql, month: string): Promise<Re
       out[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = Number(r.total_fee_with_vat) || 0;
     }
     if (page + 1 >= list.total_pages || !list.item_list.length) break;
+  }
+  return out;
+}
+
+export interface ZigzagAdDay { krw: number; rev: number }
+
+/** 광고 관리자 일별 광고비 { "YYYY-MM-DD": { krw, rev(7일 전환 매출) } } — 프록시 zigzag_ads.py 와 같은 값. 달마다 나눠 부른다 */
+export async function fetchZigzagAds(gql: ZigzagGql, months: string[]): Promise<Record<string, ZigzagAdDay>> {
+  const out: Record<string, ZigzagAdDay> = {};
+  for (const m of months) {
+    const data = await gql("GetAdPartnerAdSetDailyStatsList", AD_DAILY_QUERY, { site_id: "1", ad_set_id_list: [], date_ymd_gte: ymd(`${m}-01`), date_ymd_lte: ymd(`${m}-31`) });
+    const list = data.ad_partner_ad_set_daily_stats_list as { item_list: { date_stats_ymd: number; basic_metrics: { billing: number }; quality_index_by_date: { d7?: { click_order_amount?: number } | null } | null }[] } | null;
+    for (const r of list?.item_list ?? []) {
+      const d = String(r.date_stats_ymd);
+      out[`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`] = { krw: Math.round(r.basic_metrics?.billing ?? 0), rev: Math.round(r.quality_index_by_date?.d7?.click_order_amount ?? 0) };
+    }
   }
   return out;
 }

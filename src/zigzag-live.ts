@@ -1,12 +1,11 @@
 /**
- * 지그재그 실시간 보고서 (코페리 · 아페티) — 맥미니가 30분마다 실행 (mac/jobs/zigzag-live.job).
+ * 지그재그 실시간 보고서 (코페리 · 아페티 · 식스에이) — 맥미니가 30분마다 실행 (mac/jobs/zigzag-live.job).
  * 오피스 전략팀 → 플랫폼 탭 "{브랜드} · 지그재그" 카드와 월간 손익 메인보드가 읽는다.
  *   오늘(진행 중) · 어제 보고서를 다시 계산해서 바뀐 것만 brightbeed-reports 의 zigzag/{브랜드}/ 에 커밋 하나로 올린다.
  *   하루 한 번(06시 이후 첫 실행)은 지난 8일을 다시 계산 — 늦은 취소 · 반품, 이용료 정산 반영.
  * 에이블리 실시간(src/ably-live.ts)과 같은 구조. 받기는 src/zigzag-api.ts, 계산은 src/zigzag-report.ts.
- * 원가: 코페리 = 코페리 원가 시트 · 아페티 = MD팀 아페티 시트 (에이블리 보고서와 같은 표 · 같은 찾기).
- * 광고비: 오피스 광고 시트 data/ad-sheets/zigzag-{브랜드}.json (프록시 zigzag_ads.py 가 매일 08:00 채움). 시트가 없는 브랜드는 광고 없음.
- * 규칙: docs/ZIGZAG.md. 시험: tests/zigzag-live.test.ts
+ * 원가: 코페리 = 코페리 원가 시트 · 아페티 = MD팀 아페티 시트 (에이블리 보고서와 같은 표 · 같은 찾기) · 식스에이 = 원가표 없음 (원가 미반영).
+ * 광고비: 파트너센터 광고 관리자. 규칙: docs/ZIGZAG.md. 시험: tests/zigzag-live.test.ts
  *
  * 사용법:
  *   npm run zigzag-live                     # 오늘 · 어제 (+ 그날 첫 06시 이후 실행이면 지난 8일)
@@ -22,18 +21,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CostMatch } from "./ably-cost.js";
-import type { ZigzagOrderItem } from "./zigzag-api.js";
+import { changedFiles, liveWindow, markPartial, MAX_DAYS, won } from "./live-common.js";
+import type { ZigzagAdDay, ZigzagOrderItem } from "./zigzag-api.js";
 import { buildZigzagReport, zigzagItemsOn } from "./zigzag-report.js";
-import { commitFiles, ghGetJson, indexRowOf, mergeIndexRows, REPORTS_REPO, sameContent, type IndexRow } from "./reports-repo.js";
-
-const DAY = 86400_000;
-export const SETTLE_DAYS = 8;
-export const SETTLE_HOUR = 6;
-export const MAX_DAYS = 92;
-export const PARTIAL_REFRESH_MIN = 55;
-
-const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10);
-const won = (n: number) => Math.round(n).toLocaleString("ko-KR");
+import { commitFiles, ghGetJson, REPORTS_REPO } from "./reports-repo.js";
 
 export type CostOf = (goodsName: string, goodsCode: string, option: string) => CostMatch;
 
@@ -41,21 +32,26 @@ export interface ZigzagBrand {
   name: string;
   /** brightbeed-reports 안 경로 */
   dir: string;
-  /** 파트너센터 스토어 주소 (프록시 zigzag_sales.py 와 같음) */
+  /** 파트너센터 스토어 주소 · 세션 파일 (프록시 zigzag_sales.py 와 같음) */
   mainDomain: string;
-  /** 광고 시트 파일 이름 — 없으면 광고 없는 브랜드 */
-  adSheet?: string;
+  stateFile: string;
+  /** 기본 수수료율 — 2026-10 정산 내역 default_fee_rate_bp 로 확인 (코페리 950 · 아페티 850 · 식스에이 900) */
+  feeRate: number;
   costBasis: string;
 }
 
 export const ZIGZAG_BRANDS: Record<string, ZigzagBrand> = {
   kop: {
-    name: "코페리", dir: "zigzag/kop", mainDomain: "cq-3o0mllwj", adSheet: "zigzag-kop",
+    name: "코페리", dir: "zigzag/kop", mainDomain: "cq-3o0mllwj", stateFile: "kakaostyle-state-kop.json", feeRate: 0.095,
     costBasis: "코페리 원가 시트 (에이블리 보고서와 같은 표), 상품명 · 옵션으로 매칭",
   },
   apt: {
-    name: "아페티", dir: "zigzag/apt", mainDomain: "cq-jf6zas91",
+    name: "아페티", dir: "zigzag/apt", mainDomain: "cq-jf6zas91", stateFile: "kakaostyle-state-apt.json", feeRate: 0.085,
     costBasis: "MD팀 아페티 시트 (에이블리 보고서와 같은 표 · 같은 찾기)",
+  },
+  "6a": {
+    name: "식스에이", dir: "zigzag/6a", mainDomain: "6ashop", stateFile: "kakaostyle-state.json", feeRate: 0.09,
+    costBasis: "원가 미반영 — 식스에이 원가표 연결 전 (순이익에서 원가를 빼지 않음)",
   },
 };
 
@@ -63,15 +59,15 @@ export interface ZigzagMarketApi {
   items: (from: string, to: string) => Promise<ZigzagOrderItem[]>;
   /** 달 YYYY-MM 의 일별 직진배송 이용료 */
   fees: (month: string) => Promise<Record<string, number>>;
+  /** 달들의 일별 광고비 */
+  ads: (months: string[]) => Promise<Record<string, ZigzagAdDay>>;
 }
 
 export interface ZigzagLiveDeps {
   nowMs: number;
   api: (brand: string) => Promise<ZigzagMarketApi>;
-  /** 브랜드의 원가 찾기 — 시트를 못 읽으면 던짐 (원가 0으로 덮지 않게) */
-  costOf: (brand: string) => Promise<CostOf>;
-  /** 광고 시트 날짜별 — 파일이 없으면 null, 못 읽으면 던짐 */
-  adDays: (sheet: string) => Promise<Record<string, { krw?: number; rev?: number }> | null>;
+  /** 브랜드의 원가 찾기 (null = 원가표 없는 브랜드) — 시트를 못 읽으면 던짐 (원가 0으로 덮지 않게) */
+  costOf: (brand: string) => Promise<CostOf | null>;
   getJson: <T>(path: string) => Promise<T | null>;
   commit: (files: { path: string; content: unknown }[], message: string) => Promise<string | null>;
   brands: Record<string, ZigzagBrand>;
@@ -86,15 +82,8 @@ export interface ZigzagLiveArgs {
 }
 
 export async function runZigzagLive(args: ZigzagLiveArgs, deps: ZigzagLiveDeps) {
-  const now = new Date(deps.nowMs + 9 * 3600_000); // KST 를 UTC 필드로
-  const today = now.toISOString().slice(0, 10);
-  const asOf = now.toISOString().slice(11, 16);
-  const settle = args.days == null && now.getUTCHours() >= SETTLE_HOUR && args.state.settled !== today;
-  const nDays = args.days ?? (settle ? SETTLE_DAYS : 2);
-  const dates = Array.from({ length: nDays }, (_, i) => addDays(today, -i));
-  const oldest = dates[dates.length - 1];
-  const months = [...new Set(dates.map((d) => d.slice(0, 7)))];
-  deps.log(`[zigzag-live] ${today} ${asOf} · ${oldest} ~ ${today} (${nDays}일${settle ? " — 하루 한 번 지난 날 다시 계산" : ""}) · ${args.brands.join(", ")}${args.dry ? " · 시험(기록 안 함)" : ""}`);
+  const { today, asOf, settle, dates, oldest, months } = liveWindow(deps.nowMs, args.days, args.state.settled);
+  deps.log(`[zigzag-live] ${today} ${asOf} · ${oldest} ~ ${today} (${dates.length}일${settle ? " — 하루 한 번 지난 날 다시 계산" : ""}) · ${args.brands.join(", ")}${args.dry ? " · 시험(기록 안 함)" : ""}`);
 
   const files: { path: string; content: unknown }[] = [];
   const committed: string[] = [];
@@ -108,50 +97,29 @@ export async function runZigzagLive(args: ZigzagLiveArgs, deps: ZigzagLiveDeps) 
         api.items(oldest, today),
         Promise.all(months.map((m) => api.fees(m))),
         deps.costOf(id),
-        cfg.adSheet ? deps.adDays(cfg.adSheet) : Promise.resolve(null),
+        api.ads(months),
       ]);
       const fees = Object.assign({}, ...feeList) as Record<string, number>;
-
-      const brandFiles: { path: string; content: unknown }[] = [];
-      const rows: IndexRow[] = [];
-      const brandDone: string[] = [];
-      for (const date of dates) {
-        const adDay = ads?.[date];
+      const reports = dates.map((date) => {
         const built = buildZigzagReport(
           date,
           {
             items: zigzagItemsOn(items, date),
             directFee: fees[date] ?? 0,
-            ad: {
-              charge: adDay?.krw ?? 0,
-              adOrderPrice: adDay?.rev ?? 0,
-              basis: !cfg.adSheet ? "지그재그 광고 없음" : adDay ? "오피스 광고 시트 (지그재그 광고 관리자)" : "광고 시트 미입력 — 매일 08:00 채움",
-            },
+            ad: { charge: ads[date]?.krw ?? 0, adOrderPrice: ads[date]?.rev ?? 0, basis: "지그재그 광고 관리자" },
           },
           costOf,
-          { market: cfg.name, costBasis: cfg.costBasis },
+          { market: cfg.name, costBasis: cfg.costBasis, feeRate: cfg.feeRate },
         );
         built.generated_at = new Date(deps.nowMs).toISOString();
-        const partial = date === today;
-        const report = partial ? { ...built, as_of: asOf, assumptions: { ...built.assumptions, partial_day: true } } : built;
-        const s = report.summary;
-        deps.log(`[zigzag-live] ${cfg.name} ${date}${partial ? ` (${asOf} 기준)` : ""} 주문 ${s.orders} · 실결제 ${won(s.paid)} · 광고비 ${won(s.ad_spend)} · 이용료 ${won(s.direct_fee)} · 원가 ${won(s.cost)} · 원가 미확인 ${s.cost_missing_items}건 · 순이익 ${won(s.net)}`);
-        if (args.dry) continue;
-        const path = `${cfg.dir}/daily/${date}.json`;
-        const prev = await deps.getJson<{ generated_at?: string }>(path);
-        const stale = partial && prev?.generated_at != null && deps.nowMs - Date.parse(prev.generated_at) >= PARTIAL_REFRESH_MIN * 60_000;
-        if (prev && sameContent(prev, report) && !stale) continue;
-        brandFiles.push({ path, content: report });
-        rows.push(indexRowOf(report));
-        brandDone.push(`${id} ${date.slice(5)}`);
-      }
-      if (rows.length) {
-        const idx = (await deps.getJson<{ days: IndexRow[] }>(`${cfg.dir}/index.json`)) ?? { days: [] };
-        const days = mergeIndexRows(idx.days, rows).map((d) => (d.date !== today && d.as_of ? (({ as_of: _, ...rest }) => rest)(d) : d));
-        brandFiles.push({ path: `${cfg.dir}/index.json`, content: { updated_at: new Date(deps.nowMs).toISOString(), days } });
-      }
-      files.push(...brandFiles);
-      committed.push(...brandDone);
+        const s = built.summary;
+        deps.log(`[zigzag-live] ${cfg.name} ${date}${date === today ? ` (${asOf} 기준)` : ""} 주문 ${s.orders} · 실결제 ${won(s.paid)} · 광고비 ${won(s.ad_spend)} · 이용료 ${won(s.direct_fee)} · 원가 ${s.cost == null ? "미반영" : `${won(s.cost)} · 원가 미확인 ${s.cost_missing_items}건`} · 순이익 ${won(s.net)}`);
+        return markPartial(built, date === today, asOf);
+      });
+      if (args.dry) continue;
+      const changed = await changedFiles(cfg.dir, reports, { today, nowMs: deps.nowMs, label: id, getJson: deps.getJson });
+      files.push(...changed.files);
+      committed.push(...changed.done);
     } catch (e) {
       failed.push(`${cfg.name}: ${(e as Error).message}`);
       deps.log(`[zigzag-live] ${cfg.name} 실패: ${(e as Error).message}`);
@@ -192,15 +160,14 @@ async function main(): Promise<void> {
   const api = await import("./zigzag-api.js");
   const { loadCostRows, matchCost } = await import("./ably-cost.js");
   const { ABLY_BRANDS } = await import("./ably-brands.js");
-  const { OFFICE_RAW } = await import("./home-ad.js");
   const state = readState();
   const res = await runZigzagLive(
     { days, brands, dry, state },
     {
       nowMs: Date.now(),
       api: async (id) => {
-        const gql = api.zigzagClient(id, ZIGZAG_BRANDS[id].mainDomain);
-        return { items: (from, to) => api.fetchZigzagItems(gql, from, to), fees: (m) => api.fetchZigzinFees(gql, m) };
+        const gql = api.zigzagClient(ZIGZAG_BRANDS[id].stateFile, ZIGZAG_BRANDS[id].mainDomain);
+        return { items: (from, to) => api.fetchZigzagItems(gql, from, to), fees: (m) => api.fetchZigzinFees(gql, m), ads: (ms) => api.fetchZigzagAds(gql, ms) };
       },
       // 원가 표를 못 읽으면 실패 — 지난 보고서를 "원가 미확인"으로 덮지 않게
       costOf: async (id) => {
@@ -208,13 +175,8 @@ async function main(): Promise<void> {
           const rows = await loadCostRows(undefined, undefined, true);
           return (n, c, o) => matchCost(rows, n, c, o);
         }
-        return (await ABLY_BRANDS.apt.cost!.load()) as CostOf;
-      },
-      adDays: async (sheet) => {
-        const r = await fetch(`${OFFICE_RAW}/data/ad-sheets/${sheet}.json?_t=${Date.now()}`);
-        if (r.status === 404) return null;
-        if (!r.ok) throw new Error(`광고 시트 ${sheet} → ${r.status}`);
-        return ((await r.json()) as { days?: Record<string, { krw?: number; rev?: number }> }).days ?? {};
+        if (id === "apt") return (await ABLY_BRANDS.apt.cost!.load()) as CostOf;
+        return null;
       },
       getJson: ghGetJson,
       commit: commitFiles,
