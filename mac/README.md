@@ -58,7 +58,7 @@ TIMEOUT_MIN=20
 ## 맥에 가지 않고 상태 보기 — 비공개 보고서 레포 `mac/status.json`
 
 자동 확인이 끝날 때와 작업이 끝날 때 맥미니가 상태를 `j65209/brightbeed-reports` 의 `mac/status.json` 으로 올린다
-(내용이 바뀌었거나 3시간이 지났을 때만 — 토큰은 `.env` 의 `REPORTS_GITHUB_TOKEN`). 코드 버전 · node · 의존성 · 작업별 설치 여부 · 마지막 결과 · 빠진 설정값.
+(내용이 바뀌었거나 3시간이 지났을 때만 — 토큰은 `.env` 의 `REPORTS_GITHUB_TOKEN`). 코드 버전 · node · 의존성 · 작업별 설치 여부 · 마지막 결과 · 빠진 설정값 · 재부팅 대비 설정(`system`: 부팅 시각 · 자동 로그인 · 잠자기 분 · 정전 후 자동 켜짐 · FileVault — 읽기만 함).
 
 ```bash
 gh api "repos/j65209/brightbeed-reports/contents/mac/status.json" -H "Accept: application/vnd.github.raw+json"

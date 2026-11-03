@@ -236,15 +236,32 @@ deps_state(){
   fi
 }
 
+# 재부팅 뒤 사람 없이 돌아오는지 보는 값 — 읽기만 하고 바꾸지 않는다 (sudo 불필요). 못 읽으면 빈 값.
+# 재부팅·설정 변경 때만 상태가 다시 올라가도록 안 변하는 값만: 부팅 시각은 분까지 (켜진 동안 초 단위로 밀릴 수 있음).
+system_json(){
+  local sec boot auto="" pm
+  sec=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\),.*/\1/p')
+  [ -n "$sec" ] && boot=$(date -r "$sec" '+%F %H:%M' 2>/dev/null || date -d "@$sec" '+%F %H:%M' 2>/dev/null)   # -d 는 시험 환경의 GNU date
+  if command -v defaults >/dev/null 2>&1; then
+    if [ -n "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)" ]; then auto=on; else auto=off; fi
+  fi
+  pm=$(pmset -g 2>/dev/null)
+  printf '{"boot_at": %s, "auto_login": %s, "sleep_min": %s, "autorestart": %s, "filevault": %s}' \
+    "$(json_str "$boot")" "$(json_str "$auto")" \
+    "$(json_str "$(printf '%s\n' "$pm" | awk '$1 == "sleep" {print $2; exit}')")" \
+    "$(json_str "$(printf '%s\n' "$pm" | awk '$1 == "autorestart" {print $2; exit}')")" \
+    "$(json_str "$(fdesetup status 2>/dev/null | sed -n 's/^FileVault is \([A-Za-z]*\).*/\1/p' | tr 'A-Z' 'a-z')")"
+}
+
 status_json(){
   local f id inst sep="" last nodev envf mgr
   last=$(grep '^at=' "$STATE_DIR/last-sync.txt" 2>/dev/null | cut -d= -f2-)
   nodev=$(node_problem); [ -n "$nodev" ] || nodev=$(node -v 2>/dev/null)
   if [ -f "$CLONE_DIR/.env" ]; then envf=true; else envf=false; fi
   if lc_loaded "$MANAGER_LABEL"; then mgr=on; else mgr=off; fi
-  printf '{\n "updated_at": %s,\n "last_sync": %s,\n "commit": %s,\n "node": %s,\n "deps": %s,\n "env_file": %s,\n "manager": %s,\n "jobs": [' \
+  printf '{\n "updated_at": %s,\n "last_sync": %s,\n "commit": %s,\n "node": %s,\n "deps": %s,\n "env_file": %s,\n "manager": %s,\n "system": %s,\n "jobs": [' \
     "$(json_str "$(date '+%F %T')")" "$(json_str "$last")" "$(json_str "$(git -C "$CLONE_DIR" rev-parse --short HEAD 2>/dev/null)")" \
-    "$(json_str "$nodev")" "$(json_str "$(deps_state)")" "$envf" "$(json_str "$mgr")"
+    "$(json_str "$nodev")" "$(json_str "$(deps_state)")" "$envf" "$(json_str "$mgr")" "$(system_json)"
   for f in "$CLONE_DIR"/mac/jobs/*.job; do
     [ -f "$f" ] || continue
     id=$(basename "$f" .job)

@@ -1,7 +1,7 @@
 #!/bin/bash
 # 가짜 맥 환경에서 자동 설치 관리자 전체 흐름 시험 — 맥이 없어도(Windows Git Bash 등) 돌릴 수 있다.
 #   bash mac/tests/fake-mac.sh
-# launchctl · node · npm · uname · pkill 을 가짜 명령으로 바꾸고, 지금 폴더의 mac/ 를 담은 가짜 GitHub 저장소를 만들어
+# launchctl · node · npm · uname · pkill · sysctl · pmset · defaults · fdesetup 을 가짜 명령으로 바꾸고, 지금 폴더의 mac/ 를 담은 가짜 GitHub 저장소를 만들어
 # 설치 → 확인(변경 없음 · 일정 변경 · 작업 추가/삭제/끄기 · 스크립트 변경) → 작업 실행 → 상태 → 내리기 를 확인한다.
 # 주의: 진짜 macOS bash 3.2 문법 문제는 여기서 못 잡는다 — lib.sh 머리말의 금지 문법을 지킬 것.
 
@@ -69,6 +69,23 @@ if [ "$method" = PUT ]; then printf '%s' "$data" >"$store"; echo "PUT $url" >>"$
 [ -f "$store" ] || exit 22
 echo '{"name": "status.json", "sha": "abc123"}'
 EOF
+fake sysctl <<'EOF'
+#!/bin/bash
+echo "{ sec = $(cat "$FAKE_LAUNCHD/boot-sec" 2>/dev/null || echo 1793702520), usec = 12345 } Tue Nov  3 15:02:00 2026"
+EOF
+fake pmset <<'EOF'
+#!/bin/bash
+printf ' displaysleep         10\n sleep                1 (sleep prevented by sharingd)\n autorestart          0\n'
+EOF
+fake defaults <<'EOF'
+#!/bin/bash
+[ -f "$FAKE_LAUNCHD/autologin" ] && { echo someone; exit 0; }
+echo "The domain/default pair does not exist" >&2; exit 1
+EOF
+fake fdesetup <<'EOF'
+#!/bin/bash
+echo "FileVault is Off."
+EOF
 # 가짜 GitHub 에 올라간 상태 파일 내용 (base64 풀어서)
 gh_status(){ sed 's/.*"content":"\([^"]*\)".*/\1/' "$FAKE_LAUNCHD/gh-mac_status.json" 2>/dev/null | base64 -d 2>/dev/null; }
 puts(){ grep -c "mac/status.json" "$FAKE_LAUNCHD/puts.log" 2>/dev/null || echo 0; }
@@ -97,6 +114,8 @@ SIXSHOP_PRO_PASSWORD=pw
 SIXSHOP_PRO_ACCESS_KEY_KOP=key-kop
 SIXSHOP_PRO_ACCESS_KEY_APT=key-apt
 SIXSHOP_PRO_ACCESS_KEY_KOZ=key-koz
+SMARTSTORE_PP_CLIENT_ID=pp-id
+SMARTSTORE_PP_CLIENT_SECRET=pp-secret
 GOOGLE_SERVICE_ACCOUNT_PATH=./keys/sa.json
 EOF
 echo '{}' >"$HOME/projects/sixshop-collector/keys/sa.json"
@@ -129,6 +148,10 @@ check "바뀐 게 없으면 다시 안 올림" '[ "$(puts)" = "$n" ]'
 if [ -n "${BB_TEST_NODE:-}" ]; then
   check "올린 상태 파일은 올바른 JSON" 'gh_status | "$BB_TEST_NODE" -e "JSON.parse(require(\"fs\").readFileSync(0, \"utf8\"))"'
 fi
+boot=$(date -d @1793702520 '+%F %H:%M' 2>/dev/null || date -r 1793702520 '+%F %H:%M')
+check "재부팅 대비 설정 보고" 'gh_status | grep -qF "\"system\": {\"boot_at\": \"$boot\", \"auto_login\": \"off\", \"sleep_min\": \"1\", \"autorestart\": \"0\", \"filevault\": \"off\"}"'
+n=$(puts); echo 1793712520 >"$FAKE_LAUNCHD/boot-sec"; touch "$FAKE_LAUNCHD/autologin"; sync
+check "재부팅하면 바로 다시 올림" '[ "$(puts)" != "$n" ] && gh_status | grep -q "\"auto_login\": \"on\""'
 
 echo "3) GitHub 에서 시각 변경"
 edit 's/^AT=07:10$/AT=07:20/' "$T/src/mac/jobs/ably-daily.job"; push "시각 변경"; sync
