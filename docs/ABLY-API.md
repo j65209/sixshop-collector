@@ -83,10 +83,11 @@
 |---|---|---|---|---|---|
 | 코페리 | `ably/` (처음 만든 경로) | 플랫폼 탭 `ably-kop` | `ABLY_EMAIL` · `ABLY_PASSWORD` · `ABLY_AD_MARKET_SNO` | 46903 | 원가 시트 매칭 |
 | 아페티 | `ably/apt/` | `ably-apt` | 같은 이름 + `_APT` | 60636 | MD팀 아페티 시트 (2026-10-29~, 아래) |
-| 식스에이 | `ably/6a/` | `ably-6a` | 같은 이름 + `_6A` | 22249 | **미반영** |
+| 식스에이 | `ably/6a/` | `ably-6a` | 같은 이름 + `_6A` | 22249 | 평균 단가 × 수량 |
 
 - 광고 마켓 번호는 2026-10-28 `statistics_timeseries` 7일 합 = `dashboard/ad_performance.ad_spend` 로 확인. 계정은 맥미니 `~/projects/ably-collector/.env` 와 같다.
-- 원가 미반영 마켓(식스에이): `summary.cost = null` · `assumptions.cost_basis` "원가 미반영", 순이익 = 정산 추정 − 배송비 − 광고비 (원가 안 뺌). 오피스는 "원가 미반영" · "(원가 전)"으로 띄운다.
+- 원가표 없는 마켓(식스에이): 사장님이 정한 제품 평균 단가(위안, `.env` `HOME_AVG_COST_CNY`) × `HOME_CNY_KRW` 를 주문 수량마다 뺀다 (`avgCostMatcher`). 값이 없으면 그 마켓만 실패.
+- 원가 미반영 마켓(`costs: false`): `summary.cost = null` · `assumptions.cost_basis` "원가 미반영", 순이익 = 정산 추정 − 배송비 − 광고비 (원가 안 뺌). 오피스는 "원가 미반영" · "(원가 전)"으로 띄운다.
   원가를 붙이려면 `src/ably-brands.ts` 의 `costs` 를 true 로 하고, 코페리 시트가 아니면 `cost`(근거 문구 · 원가 찾기 load)를 단다.
 - 아페티 원가: 공홈 보고서와 같은 MD팀 아페티 시트(`loadApetiCosts` — Product List → 공홈 가격 수정 표 → 플랫폼 세트 F열 공급가, docs/HOME-DAILY.md "아페티 · 코즈미 원가").
   에이블리 옵션은 "키: 값" 없이 값만 `/` 로 와서 `src/cost-match.ts` `matchCostAbly` 로 읽는다 — 첫 칸 구매 형식(`1+1` 두 개 · `단품` 첫 상품만),

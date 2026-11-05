@@ -21,6 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CostMatch } from "./ably-cost.js";
+import { AVG_COST_BASIS, avgCostMatcher } from "./home-brands.js";
 import { changedFiles, liveWindow, markPartial, MAX_DAYS, won } from "./live-common.js";
 import type { ZigzagAdDay, ZigzagOrderItem } from "./zigzag-api.js";
 import { buildZigzagReport, zigzagItemsOn } from "./zigzag-report.js";
@@ -51,7 +52,7 @@ export const ZIGZAG_BRANDS: Record<string, ZigzagBrand> = {
   },
   "6a": {
     name: "식스에이", dir: "zigzag/6a", mainDomain: "6ashop", stateFile: "kakaostyle-state.json", feeRate: 0.09,
-    costBasis: "원가 미반영 — 식스에이 원가표 연결 전 (순이익에서 원가를 빼지 않음)",
+    costBasis: AVG_COST_BASIS,
   },
 };
 
@@ -176,6 +177,7 @@ async function main(): Promise<void> {
           return (n, c, o) => matchCost(rows, n, c, o);
         }
         if (id === "apt") return (await ABLY_BRANDS.apt.cost!.load()) as CostOf;
+        if (id === "6a") return avgCostMatcher() as CostOf;
         return null;
       },
       getJson: ghGetJson,

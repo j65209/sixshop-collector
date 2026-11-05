@@ -8,7 +8,7 @@
  */
 import type { CostRow } from "./ably-cost.js";
 import { costBook, matchCostAbly, type CostAlias } from "./cost-match.js";
-import { APETI_ALIASES, loadApetiCosts, type CostMatcher } from "./home-brands.js";
+import { APETI_ALIASES, AVG_COST_BASIS, avgCostMatcher, loadApetiCosts, type CostMatcher } from "./home-brands.js";
 
 /** 코페리 원가 시트가 아닌 마켓의 원가 */
 export interface AblyCost {
@@ -59,5 +59,8 @@ export const ABLY_BRANDS: Record<string, AblyBrand> = {
       load: async () => apetiAblyMatcher(await loadApetiCosts()),
     },
   },
-  "6a": { name: "식스에이", dir: "ably/6a", envSuffix: "_6A", costs: false },
+  "6a": {
+    name: "식스에이", dir: "ably/6a", envSuffix: "_6A", costs: true,
+    cost: { basis: AVG_COST_BASIS, load: async () => avgCostMatcher() },
+  },
 };

@@ -6,6 +6,7 @@
  * 개인정보 빼기, 토큰 저장 · 갱신 · 로그인 실패 쉬기 · 마켓별 계정을 확인한다.
  */
 import assert from "node:assert/strict";
+process.env.HOME_AVG_COST_CNY = "2"; // 시험값
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -254,7 +255,7 @@ const APT_ITEMS: AblyOrderItem[] = [
   item("2026-10-26 12:00", 14000, { name: "🔥최대할인🔥Silver925 R-22", option: "silver/." }),
 ];
 
-await test("아페티 · 식스에이 — ably/apt · ably/6a 경로, 아페티는 MD팀 아페티 시트 원가 · 식스에이는 원가 미반영(cost null · 순이익에 원가 안 뺌)", async () => {
+await test("아페티 · 식스에이 — ably/apt · ably/6a 경로, 아페티는 MD팀 아페티 시트 원가 · 식스에이는 평균 단가 × 수량", async () => {
   const r = new Map<string, unknown>();
   const f = fakes({ nowMs: at("2026-10-27 15:30"), repo: r, items: APT_ITEMS });
   const res = await runAblyLive({ days: null, brands: ["apt", "6a"], dry: false, state: settledToday("2026-10-27") }, f.deps);
@@ -285,12 +286,29 @@ await test("아페티 · 식스에이 — ably/apt · ably/6a 경로, 아페티�
 
   const s = r.get("ably/6a/daily/2026-10-27.json") as Rep & { market: string };
   assert.equal(s.market, "식스에이");
-  assert.equal(s.summary.cost, null);
+  assert.ok(s.orders.length > 0);
+  assert.ok(s.orders.every((o) => o.cost_unit === 600), "시험값 ¥2 × 300");
+  assert.equal(s.summary.cost, s.orders.reduce((a, o) => a + o.cost, 0));
   assert.equal(s.summary.cost_missing_items, 0);
-  assert.match(String(s.assumptions.cost_basis), /원가 미반영/);
-  assert.equal(s.summary.net, s.summary.settle_est - s.summary.shipping - s.summary.ad_spend, "순이익 = 정산 − 배송비 − 광고비");
-  assert.ok(s.orders.every((o) => o.cost_unit === null && o.cost === 0));
-  assert.equal(((r.get("ably/6a/index.json") as { days: { cost: unknown }[] }).days[0]).cost, null, "index 줄도 원가 null (오피스 '원가 전')");
+  assert.match(String(s.assumptions.cost_basis), /평균 단가/);
+  assert.equal(s.summary.net, s.summary.settle_est - s.summary.shipping - s.summary.ad_spend - s.summary.cost, "순이익 = 정산 − 배송비 − 광고비 − 원가");
+  assert.equal(((r.get("ably/6a/index.json") as { days: { cost: unknown }[] }).days[0]).cost, s.summary.cost, "index 줄에도 원가");
+});
+
+await test("평균 단가가 .env 에 없으면 식스에이만 실패 — 지난 보고서를 원가 없이 덮지 않음", async () => {
+  const saved = process.env.HOME_AVG_COST_CNY;
+  delete process.env.HOME_AVG_COST_CNY;
+  try {
+    const r = new Map<string, unknown>();
+    const f = fakes({ nowMs: at("2026-10-27 15:30"), repo: r, items: APT_ITEMS });
+    const res = await runAblyLive({ days: null, brands: ["apt", "6a"], dry: false, state: settledToday("2026-10-27") }, f.deps);
+    assert.equal(res.failed.length, 1);
+    assert.match(res.failed[0], /HOME_AVG_COST_CNY/);
+    assert.equal(r.get("ably/6a/daily/2026-10-27.json"), undefined);
+    assert.ok(r.get("ably/apt/daily/2026-10-27.json"), "아페티는 그대로 올림");
+  } finally {
+    process.env.HOME_AVG_COST_CNY = saved;
+  }
 });
 
 await test("아페티 시트를 못 읽으면 아페티만 실패 — 아페티 파일은 하나도 안 덮음, 식스에이는 그대로 올림", async () => {

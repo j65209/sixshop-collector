@@ -15,6 +15,16 @@ export const CNY_KRW = Number(process.env.HOME_CNY_KRW ?? 300);
 
 export type CostMatcher = (goodsName: string, goodsCode: string, option: string) => CostMatch;
 
+/** 원가표가 없는 브랜드(식스에이 · 야르) — 사장님이 정한 제품 평균 단가(위안) × CNY_KRW 를 주문 수량마다 뺀다. 세트 · 1+1 도 수량 1개.
+ *  공개 레포라 값은 .env HOME_AVG_COST_CNY. 없으면 실패 — 지난 보고서를 원가 없이 덮지 않게 */
+export const AVG_COST_BASIS = `원가표 없음 — 사장님이 정한 제품 평균 단가(위안) × ${CNY_KRW}, 주문 수량마다 (세트 · 1+1 도 1개)`;
+export function avgCostMatcher(): CostMatcher {
+  const cny = Number(process.env.HOME_AVG_COST_CNY);
+  if (!(cny > 0)) throw new Error("HOME_AVG_COST_CNY 가 없어요 (.env) — 식스에이 · 야르 평균 단가");
+  const unit = Math.round(cny * CNY_KRW);
+  return () => ({ cost_unit: unit, cost_name: "제품 평균 단가", cost_match: "exact" });
+}
+
 export interface HomeBrand {
   name: string;
   credEnvSuffix: string;
@@ -218,18 +228,18 @@ export const HOME_BRANDS: Record<string, HomeBrand> = {
     loadCosts: () => loadCostTables([{ url: orderListUrl("979624320"), nameCol: 2, costCol: 4, skip: 1, table: "A", multiplier: CNY_KRW }]),
     costMatch: { special: ctSpecial },
   },
-  // 2026-11 초 식스샵 프로로 이전 — 프로의 옛 주문은 자사몰 일부뿐이라 옛 상점 주문이 끝난 다음 날부터만 쓴다. 원가표 연결 전
+  // 2026-11 초 식스샵 프로로 이전 — 프로의 옛 주문은 자사몰 일부뿐이라 옛 상점 주문이 끝난 다음 날부터만 쓴다 (그 전은 구 식스샵 엑셀로 채운 보고서)
   "6a": {
     name: "식스에이", credEnvSuffix: "_6A", proStore: "6ashop", liveSince: "2026-11-04",
-    costBasis: "원가표 연결 전 — 원가를 빼지 않은 순이익",
+    costBasis: AVG_COST_BASIS,
     loadCosts: async () => [],
-    noCostSheet: true,
+    makeMatcher: async () => avgCostMatcher(),
   },
   yar: {
     name: "야르", credEnvSuffix: "_YAR", proStore: "yarshop", liveSince: "2026-11-03",
-    costBasis: "원가표 연결 전 — 원가를 빼지 않은 순이익",
+    costBasis: AVG_COST_BASIS,
     loadCosts: async () => [],
-    noCostSheet: true,
+    makeMatcher: async () => avgCostMatcher(),
   },
 };
 

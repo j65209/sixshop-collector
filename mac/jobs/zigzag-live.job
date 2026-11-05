@@ -5,7 +5,7 @@
 DESC=지그재그 실시간 보고서 (코페리 · 아페티 · 식스에이)
 RUN=npm run zigzag-live
 EVERY_MIN=30
-REQUIRES=REPORTS_GITHUB_TOKEN
+REQUIRES=REPORTS_GITHUB_TOKEN HOME_AVG_COST_CNY
 TIMEOUT_MIN=10
 # RUN_NOW: 값을 바꿔 올리면 맥미니가 다음 확인 때(15분 안) 한 번 바로 실행
 RUN_NOW=2026-11-02 식스에이 추가 · 광고 관리자 연결

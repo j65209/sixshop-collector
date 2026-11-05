@@ -23,7 +23,7 @@ npx tsx tests/zigzag-live.test.ts    # 시험 (네트워크 · 계정 없음)
 | 직진배송 주문 | `ZonlySearchOrderItemList` (직진배송 → 주문 검색) |
 | 직배 이용료 | `GetWmsFeeSettlementPageList` `total_fee_with_vat` (직진배송 → 이용료 내역, 정산일별 · 부가세 포함) |
 | 광고비 | `GetAdPartnerAdSetDailyStatsList` 일별 과금액 (광고 관리자). 광고를 안 돌린 날 · 브랜드는 0 |
-| 원가 | 코페리 원가 시트 `matchCost` · 아페티 MD팀 시트 `apetiAblyMatcher` (에이블리 보고서와 같은 표 · 같은 찾기). 식스에이는 원가표 연결 전 — 원가를 빼지 않고 `summary.cost` 를 null 로 둔다 |
+| 원가 | 코페리 원가 시트 `matchCost` · 아페티 MD팀 시트 `apetiAblyMatcher` (에이블리 보고서와 같은 표 · 같은 찾기). 식스에이는 원가표가 없어 평균 단가 × 수량 (`avgCostMatcher`, 값은 `.env` `HOME_AVG_COST_CNY`) |
 
 구매자 이름 · 이메일 · 수령인은 쿼리에 넣지 않는다.
 쓰지 않지만 있는 것: `GetOrderSettlementShopList` · `GetReconcileSummary` (일별 스토어 정산 — 실제 수수료 · 스토어 쿠폰 부담 · 정산액).
