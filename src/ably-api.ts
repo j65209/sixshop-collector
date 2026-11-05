@@ -196,8 +196,11 @@ export async function ablyLogin(opts: { persist?: boolean; envSuffix?: string; t
       delete state.loginFail;
       return keep(r.json, access);
     } catch (e) {
-      state.loginFail = { at: Date.now(), cred, message: (e as Error).message.slice(0, 160) };
-      save();
+      // 네트워크 오류(fetch failed)는 비밀번호와 상관없다 — 잠깐 끊긴 것으로 6시간 쉬지 않게 서버가 거절했을 때만 기록
+      if ((e as Error).message.startsWith("에이블리 로그인 실패")) {
+        state.loginFail = { at: Date.now(), cred, message: (e as Error).message.slice(0, 160) };
+        save();
+      }
       throw e;
     }
   };
