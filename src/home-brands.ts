@@ -218,6 +218,19 @@ export const HOME_BRANDS: Record<string, HomeBrand> = {
     loadCosts: () => loadCostTables([{ url: orderListUrl("979624320"), nameCol: 2, costCol: 4, skip: 1, table: "A", multiplier: CNY_KRW }]),
     costMatch: { special: ctSpecial },
   },
+  // 2026-11 초 식스샵 프로로 이전 — 프로의 옛 주문은 자사몰 일부뿐이라 옛 상점 주문이 끝난 다음 날부터만 쓴다. 원가표 연결 전
+  "6a": {
+    name: "식스에이", credEnvSuffix: "_6A", proStore: "6ashop", liveSince: "2026-11-04",
+    costBasis: "원가표 연결 전 — 원가를 빼지 않은 순이익",
+    loadCosts: async () => [],
+    noCostSheet: true,
+  },
+  yar: {
+    name: "야르", credEnvSuffix: "_YAR", proStore: "yarshop", liveSince: "2026-11-03",
+    costBasis: "원가표 연결 전 — 원가를 빼지 않은 순이익",
+    loadCosts: async () => [],
+    noCostSheet: true,
+  },
 };
 
 /** 브랜드에 맞는 원가 찾기 — 시트를 읽어 한 번 색인해 둔다 (2판 · 직접 만든 찾기 · [1+1] 배수) */
